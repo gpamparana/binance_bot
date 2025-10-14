@@ -47,3 +47,9 @@ position:
   max_position_size: 1.0  # Max position size in BTC
   max_leverage_used: 5.0  # Max effective leverage
   emergency_liquidation_buffer: 0.15  # Keep 15% buffer from liquidation
+
+# Placement Policy (Inventory Biasing by Regime)
+policy:
+  strategy: throttled-counter  # core-and-scalp or throttled-counter
+  counter_levels: 5  # Number of counter-trend levels to maintain
+  counter_qty_scale: 0.5  # Scale counter-trend quantities by 50%
