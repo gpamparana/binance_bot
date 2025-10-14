@@ -1,0 +1,43 @@
+# Binance Futures Venue Configuration
+# Environment variables can be referenced with ${VAR_NAME}
+
+venue:
+  name: BINANCE
+  venue_type: futures
+  account_type: PERPETUAL_LINEAR
+
+# API Configuration
+api:
+  api_key: ${BINANCE_API_KEY}
+  api_secret: ${BINANCE_API_SECRET}
+  testnet: false
+  base_url: https://fapi.binance.com
+
+# Trading Configuration
+trading:
+  hedge_mode: true  # Enable hedge mode for long/short positions simultaneously
+  leverage: 10
+  margin_type: CROSSED  # CROSSED or ISOLATED
+
+# Risk & Precision Guards
+risk:
+  max_leverage: 20
+  min_order_size_usdt: 5.0
+  max_order_size_usdt: 100000.0
+
+precision:
+  price_precision: 2
+  quantity_precision: 3
+  min_notional: 5.0
+
+# Rate Limits
+rate_limits:
+  orders_per_second: 5
+  orders_per_minute: 100
+  weight_per_minute: 1200
+
+# WebSocket Configuration
+websocket:
+  ping_interval: 30
+  reconnect_timeout: 60
+  max_reconnect_attempts: 10

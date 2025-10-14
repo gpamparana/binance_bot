@@ -1,0 +1,49 @@
+# Hedge Grid Strategy Configuration v1
+
+strategy:
+  name: hedge_grid_v1
+  instrument_id: BTCUSDT-PERP.BINANCE
+
+# Grid Parameters
+grid:
+  grid_step_bps: 25.0  # Grid spacing in basis points (0.25%)
+  grid_levels_long: 10  # Number of long grid levels below mid
+  grid_levels_short: 10  # Number of short grid levels above mid
+  base_qty: 0.001  # Base order quantity in BTC
+  qty_scale: 1.1  # Quantity multiplier per level (geometric scaling)
+
+# Take Profit / Stop Loss
+exit:
+  tp_steps: 2  # Take profit after 2 grid steps
+  sl_steps: 8  # Stop loss after 8 grid steps
+
+# Grid Re-centering
+rebalance:
+  recenter_trigger_bps: 150.0  # Re-center grid if price moves 1.5% from mid
+  max_inventory_quote: 10000.0  # Max inventory in quote currency (USDT)
+
+# Order Execution
+execution:
+  maker_only: true
+  use_post_only_retries: true
+  retry_attempts: 3
+  retry_delay_ms: 100
+
+# Funding Rate Filter
+funding:
+  funding_window_minutes: 480  # 8-hour window for funding rate check
+  funding_max_cost_bps: 10.0  # Max acceptable funding cost in bps per window
+
+# Regime Detection Parameters
+regime:
+  adx_len: 14  # ADX period for trend strength
+  ema_fast: 12  # Fast EMA period
+  ema_slow: 26  # Slow EMA period
+  atr_len: 14  # ATR period for volatility
+  hysteresis_bps: 50.0  # Hysteresis band for regime switching (0.5%)
+
+# Position Sizing
+position:
+  max_position_size: 1.0  # Max position size in BTC
+  max_leverage_used: 5.0  # Max effective leverage
+  emergency_liquidation_buffer: 0.15  # Keep 15% buffer from liquidation
