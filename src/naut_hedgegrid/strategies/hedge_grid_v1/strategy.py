@@ -1,12 +1,14 @@
 """HedgeGridV1 trading strategy implementation."""
 
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
 
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import OrderSide, TimeInForce, TriggerType
 from nautilus_trader.model.events import OrderAccepted, OrderCanceled, OrderFilled
-from nautilus_trader.model.identifiers import InstrumentId, PositionId
+from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.orders import LimitOrder, StopMarketOrder
@@ -74,12 +76,14 @@ class HedgeGridV1(Strategy):
         self._regime_detector: RegimeDetector | None = None
         self._funding_guard: FundingGuard | None = None
         self._order_diff: OrderDiff | None = None
-        self._live_orders: dict[str, LiveOrder] = {}
         self._last_mid: float | None = None
         self._grid_center: float = 0.0
 
         # Strategy identifier for order IDs
         self._strategy_name = "HG1"
+
+        # Venue for order queries
+        self._venue = Venue("BINANCE")
 
     def on_start(self) -> None:
         """
@@ -176,13 +180,17 @@ class HedgeGridV1(Strategy):
         """
         self.log.info("Stopping HedgeGridV1 strategy")
 
-        # Cancel all open orders
-        open_order_count = len(self._live_orders)
-        if open_order_count > 0:
-            self.log.info(f"Canceling {open_order_count} open orders")
-            for client_order_id in list(self._live_orders.keys()):
-                order = self.cache.order(self.venue_order_id_to_client_order_id(client_order_id))
-                if order is not None and order.is_open:
+        # Cancel all open grid orders (optimized with cache query)
+        open_orders = [
+            order
+            for order in self.cache.orders_open(venue=self._venue)
+            if order.client_order_id.value.startswith(self._strategy_name)
+        ]
+
+        if open_orders:
+            self.log.info(f"Canceling {len(open_orders)} open orders")
+            for order in open_orders:
+                if order.is_open:
                     self.cancel_order(order)
 
         self.log.info("HedgeGridV1 strategy stopped")
@@ -280,8 +288,8 @@ class HedgeGridV1(Strategy):
             + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
 
-        # Generate diff
-        live_orders_list = list(self._live_orders.values())
+        # Generate diff (using cache query instead of manual tracking)
+        live_orders_list = self._get_live_grid_orders()
         diff_result = self._order_diff.diff(
             desired_ladders=ladders,
             live_orders=live_orders_list,
@@ -342,7 +350,7 @@ class HedgeGridV1(Strategy):
 
         # Parse client_order_id to get level and side
         try:
-            parsed = parse_client_order_id(event.client_order_id.value)
+            parsed = self._parse_cached_order_id(event.client_order_id.value)
             side = parsed["side"]
             level = parsed["level"]
         except (ValueError, KeyError) as e:
@@ -357,20 +365,39 @@ class HedgeGridV1(Strategy):
         fill_price = float(event.last_px)
         fill_qty = float(event.last_qty)
 
-        # Calculate price step
-        price_step = self._last_mid * (self._hedge_grid_config.grid.grid_step_bps / 10000)
+        # Calculate price step using Decimal for precision
+        mid_decimal = Decimal(str(self._last_mid))
+        fill_price_decimal = Decimal(str(fill_price))
+        step_bps = Decimal(str(self._hedge_grid_config.grid.grid_step_bps))
+        price_step = mid_decimal * (step_bps / Decimal("10000"))
 
-        # Calculate TP/SL based on side
+        # Calculate TP/SL based on side using Decimal
         if side == Side.LONG:
             # LONG: TP above entry, SL below entry
-            tp_price = fill_price + (self._hedge_grid_config.exit.tp_steps * price_step)
-            sl_price = fill_price - (self._hedge_grid_config.exit.sl_steps * price_step)
-            sl_price = max(sl_price, fill_price * 0.01)  # Ensure positive
+            tp_price_decimal = fill_price_decimal + (
+                Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+            )
+            tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+            sl_price_decimal = fill_price_decimal - (
+                Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+            )
+            if sl_price_decimal <= 0:
+                sl_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
+            sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
         else:
             # SHORT: TP below entry, SL above entry
-            tp_price = fill_price - (self._hedge_grid_config.exit.tp_steps * price_step)
-            tp_price = max(tp_price, fill_price * 0.01)  # Ensure positive
-            sl_price = fill_price + (self._hedge_grid_config.exit.sl_steps * price_step)
+            tp_price_decimal = fill_price_decimal - (
+                Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+            )
+            if tp_price_decimal <= 0:
+                tp_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
+            tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+            sl_price_decimal = fill_price_decimal + (
+                Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+            )
+            sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
         self.log.info(
             f"Creating TP/SL for {side} fill @ {fill_price:.2f}: "
@@ -408,55 +435,29 @@ class HedgeGridV1(Strategy):
         """
         Handle order accepted event.
 
-        Adds order to live orders tracking dict.
+        Logs order acceptance. Order tracking is done via cache queries.
 
         Args:
             event: Order accepted event
 
         """
-        # Only track grid orders (not TP/SL)
-        if not event.client_order_id.value.startswith(self._strategy_name):
-            return
-
-        # Get order from cache
-        order = self.cache.order(event.client_order_id)
-        if order is None or not isinstance(order, LimitOrder):
-            return
-
-        # Parse side from client_order_id
-        try:
-            parsed = parse_client_order_id(event.client_order_id.value)
-            side = parsed["side"]
-        except (ValueError, KeyError):
-            self.log.warning(f"Could not parse client_order_id {event.client_order_id}")
-            return
-
-        # Add to live orders
-        live_order = LiveOrder(
-            client_order_id=event.client_order_id.value,
-            side=side,  # type: ignore[arg-type]
-            price=float(order.price),
-            qty=float(order.quantity),
-            status="OPEN",
-        )
-        self._live_orders[event.client_order_id.value] = live_order
-
-        self.log.debug(f"Order accepted and tracked: {event.client_order_id}")
+        # Log order acceptance
+        if event.client_order_id.value.startswith(self._strategy_name):
+            self.log.debug(f"Order accepted: {event.client_order_id}")
 
     def on_order_canceled(self, event: OrderCanceled) -> None:
         """
         Handle order canceled event.
 
-        Removes order from live orders tracking dict.
+        Logs order cancellation. Order tracking is done via cache queries.
 
         Args:
             event: Order canceled event
 
         """
-        # Remove from live orders if present
-        if event.client_order_id.value in self._live_orders:
-            del self._live_orders[event.client_order_id.value]
-            self.log.debug(f"Order canceled and removed: {event.client_order_id}")
+        # Log order cancellation
+        if event.client_order_id.value.startswith(self._strategy_name):
+            self.log.debug(f"Order canceled: {event.client_order_id}")
 
     def _execute_diff(self, diff_result) -> None:
         """
@@ -674,19 +675,71 @@ class HedgeGridV1(Strategy):
 
         return order
 
-    def venue_order_id_to_client_order_id(self, client_order_id_str: str):
+    def venue_order_id_to_client_order_id(self, client_order_id_str: str) -> ClientOrderId:
         """
         Helper to convert string client_order_id to ClientOrderId.
-
-        This is a placeholder - actual implementation depends on Nautilus version.
 
         Args:
             client_order_id_str: Client order ID as string
 
         Returns:
-            ClientOrderId object or string (depending on Nautilus API)
+            ClientOrderId object for Nautilus compatibility
 
         """
-        # In newer Nautilus versions, may need to use ClientOrderId class
-        # For now, returning string for compatibility
-        return client_order_id_str
+        return ClientOrderId(client_order_id_str)
+
+    @lru_cache(maxsize=1000)
+    def _parse_cached_order_id(self, client_order_id: str) -> dict:
+        """
+        Parse client order ID with caching to avoid repeated parsing.
+
+        Args:
+            client_order_id: Client order ID string
+
+        Returns:
+            Parsed order ID dict
+
+        """
+        return parse_client_order_id(client_order_id)
+
+    def _get_live_grid_orders(self) -> list[LiveOrder]:
+        """
+        Get live grid orders from cache.
+
+        Returns:
+            List of LiveOrder objects for grid orders only (not TP/SL)
+
+        """
+        live_orders = []
+
+        # Query open orders from cache
+        open_orders = self.cache.orders_open(venue=self._venue)
+
+        for order in open_orders:
+            # Only include grid orders (not TP/SL)
+            if not order.client_order_id.value.startswith(self._strategy_name):
+                continue
+
+            # Skip TP/SL orders
+            if "-TP-" in order.client_order_id.value or "-SL-" in order.client_order_id.value:
+                continue
+
+            # Parse order metadata
+            try:
+                parsed = self._parse_cached_order_id(order.client_order_id.value)
+                side = parsed["side"]
+
+                # Create LiveOrder object
+                live_order = LiveOrder(
+                    client_order_id=order.client_order_id.value,
+                    side=side,  # type: ignore[arg-type]
+                    price=float(order.price) if hasattr(order, "price") else 0.0,
+                    qty=float(order.quantity),
+                    status="OPEN",
+                )
+                live_orders.append(live_order)
+            except (ValueError, KeyError) as e:
+                self.log.warning(f"Could not parse order {order.client_order_id}: {e}")
+                continue
+
+        return live_orders

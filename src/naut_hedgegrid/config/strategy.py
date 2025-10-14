@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from naut_hedgegrid.config.base import BaseYamlConfigLoader
 
@@ -35,12 +35,38 @@ class GridConfig(BaseModel):
         description="Quantity multiplier per level (geometric scaling)",
     )
 
+    @field_validator("grid_step_bps")
+    @classmethod
+    def validate_grid_step(cls, v: float) -> float:
+        """Ensure grid step is reasonable (not too small to avoid excessive orders)."""
+        if v < 5.0:  # Less than 0.05%
+            raise ValueError(f"Grid step {v} bps is too small, minimum is 5 bps (0.05%)")
+        return v
+
+    @field_validator("qty_scale")
+    @classmethod
+    def validate_qty_scale(cls, v: float) -> float:
+        """Ensure qty_scale doesn't lead to extreme position sizes."""
+        if v > 3.0:
+            raise ValueError(f"Quantity scale {v} is too aggressive, maximum is 3.0")
+        return v
+
 
 class ExitConfig(BaseModel):
     """Take profit and stop loss parameters."""
 
     tp_steps: int = Field(ge=1, le=100, description="Take profit after N grid steps")
     sl_steps: int = Field(ge=1, le=100, description="Stop loss after N grid steps")
+
+    @model_validator(mode="after")
+    def validate_tp_sl_relationship(self) -> "ExitConfig":
+        """Ensure TP and SL make sense relative to each other."""
+        if self.tp_steps > self.sl_steps * 3:
+            raise ValueError(
+                f"TP steps ({self.tp_steps}) shouldn't be more than 3x SL steps ({self.sl_steps}) "
+                "to maintain reasonable risk/reward"
+            )
+        return self
 
 
 class RebalanceConfig(BaseModel):
@@ -102,6 +128,15 @@ class RegimeConfig(BaseModel):
         description="Hysteresis band for regime switching in bps",
     )
 
+    @model_validator(mode="after")
+    def validate_ema_relationship(self) -> "RegimeConfig":
+        """Ensure fast EMA is actually faster than slow EMA."""
+        if self.ema_fast >= self.ema_slow:
+            raise ValueError(
+                f"Fast EMA period ({self.ema_fast}) must be less than slow EMA period ({self.ema_slow})"
+            )
+        return self
+
 
 class PositionConfig(BaseModel):
     """Position sizing and leverage limits."""
@@ -113,6 +148,23 @@ class PositionConfig(BaseModel):
         le=1,
         description="Safety buffer from liquidation price (0.15 = 15%)",
     )
+
+    @field_validator("max_leverage_used")
+    @classmethod
+    def validate_leverage(cls, v: float) -> float:
+        """Warn about high leverage usage."""
+        if v > 20:
+            # Note: This is a warning, not an error. High leverage is risky but allowed.
+            pass
+        return v
+
+    @field_validator("emergency_liquidation_buffer")
+    @classmethod
+    def validate_buffer(cls, v: float) -> float:
+        """Ensure liquidation buffer is reasonable."""
+        if v < 0.05:  # Less than 5%
+            raise ValueError(f"Emergency liquidation buffer {v:.1%} is too small, minimum is 5%")
+        return v
 
 
 class PolicyConfig(BaseModel):

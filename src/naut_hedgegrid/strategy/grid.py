@@ -1,5 +1,7 @@
 """Grid construction and adaptive re-centering for hedge grid strategy."""
 
+from decimal import ROUND_HALF_UP, Decimal
+
 from naut_hedgegrid.config.strategy import HedgeGridConfig
 from naut_hedgegrid.domain.types import Ladder, Regime, Rung, Side
 
@@ -40,8 +42,10 @@ class GridEngine:
             msg = f"Mid price must be positive, got {mid}"
             raise ValueError(msg)
 
-        # Calculate price step from basis points
-        price_step = mid * (cfg.grid.grid_step_bps / 10000)
+        # Calculate price step from basis points using Decimal for precision
+        mid_decimal = Decimal(str(mid))
+        step_bps = Decimal(str(cfg.grid.grid_step_bps))
+        price_step = mid_decimal * (step_bps / Decimal("10000"))
 
         # Build LONG ladder (below mid price)
         long_ladder = GridEngine._build_long_ladder(mid, price_step, cfg)
@@ -58,14 +62,14 @@ class GridEngine:
     @staticmethod
     def _build_long_ladder(
         mid: float,
-        price_step: float,
+        price_step: Decimal,
         cfg: HedgeGridConfig,
     ) -> Ladder:
         """Build LONG ladder with levels below mid price.
 
         Args:
             mid: Mid price
-            price_step: Price increment between levels
+            price_step: Price increment between levels (as Decimal)
             cfg: Strategy configuration
 
         Returns:
@@ -73,25 +77,32 @@ class GridEngine:
 
         """
         rungs = []
+        mid_decimal = Decimal(str(mid))
+        base_qty_decimal = Decimal(str(cfg.grid.base_qty))
+        qty_scale_decimal = Decimal(str(cfg.grid.qty_scale))
 
         for level in range(1, cfg.grid.grid_levels_long + 1):
-            # Price below mid
-            price = mid - (level * price_step)
+            # Price below mid (using Decimal for precision)
+            price_decimal = mid_decimal - (Decimal(level) * price_step)
+            price = float(price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-            # Geometric quantity scaling
-            qty = cfg.grid.base_qty * (cfg.grid.qty_scale ** (level - 1))
+            # Geometric quantity scaling (using Decimal)
+            qty_decimal = base_qty_decimal * (qty_scale_decimal ** (level - 1))
+            qty = float(qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
 
             # TP above entry, SL below entry
             tp = None
             if cfg.exit.tp_steps > 0:
-                tp = price + (cfg.exit.tp_steps * price_step)
+                tp_decimal = price_decimal + (Decimal(cfg.exit.tp_steps) * price_step)
+                tp = float(tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             sl = None
             if cfg.exit.sl_steps > 0:
-                sl = price - (cfg.exit.sl_steps * price_step)
+                sl_decimal = price_decimal - (Decimal(cfg.exit.sl_steps) * price_step)
                 # Ensure SL is positive
-                if sl <= 0:
-                    sl = price * 0.01  # Minimum 1% of entry price
+                if sl_decimal <= 0:
+                    sl_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
+                sl = float(sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             rung = Rung(
                 price=price,
@@ -107,14 +118,14 @@ class GridEngine:
     @staticmethod
     def _build_short_ladder(
         mid: float,
-        price_step: float,
+        price_step: Decimal,
         cfg: HedgeGridConfig,
     ) -> Ladder:
         """Build SHORT ladder with levels above mid price.
 
         Args:
             mid: Mid price
-            price_step: Price increment between levels
+            price_step: Price increment between levels (as Decimal)
             cfg: Strategy configuration
 
         Returns:
@@ -122,25 +133,32 @@ class GridEngine:
 
         """
         rungs = []
+        mid_decimal = Decimal(str(mid))
+        base_qty_decimal = Decimal(str(cfg.grid.base_qty))
+        qty_scale_decimal = Decimal(str(cfg.grid.qty_scale))
 
         for level in range(1, cfg.grid.grid_levels_short + 1):
-            # Price above mid
-            price = mid + (level * price_step)
+            # Price above mid (using Decimal for precision)
+            price_decimal = mid_decimal + (Decimal(level) * price_step)
+            price = float(price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-            # Geometric quantity scaling
-            qty = cfg.grid.base_qty * (cfg.grid.qty_scale ** (level - 1))
+            # Geometric quantity scaling (using Decimal)
+            qty_decimal = base_qty_decimal * (qty_scale_decimal ** (level - 1))
+            qty = float(qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
 
             # TP below entry, SL above entry
             tp = None
             if cfg.exit.tp_steps > 0:
-                tp = price - (cfg.exit.tp_steps * price_step)
+                tp_decimal = price_decimal - (Decimal(cfg.exit.tp_steps) * price_step)
                 # Ensure TP is positive
-                if tp <= 0:
-                    tp = price * 0.01  # Minimum 1% of entry price
+                if tp_decimal <= 0:
+                    tp_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
+                tp = float(tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             sl = None
             if cfg.exit.sl_steps > 0:
-                sl = price + (cfg.exit.sl_steps * price_step)
+                sl_decimal = price_decimal + (Decimal(cfg.exit.sl_steps) * price_step)
+                sl = float(sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             rung = Rung(
                 price=price,
@@ -243,8 +261,12 @@ class GridEngine:
         if last_center == 0:
             return True  # Always recenter if no previous center
 
-        # Calculate deviation in basis points
-        deviation_bps = abs((mid - last_center) / last_center) * 10000
+        # Calculate deviation in basis points using Decimal for precision
+        mid_decimal = Decimal(str(mid))
+        last_center_decimal = Decimal(str(last_center))
+        deviation_bps = abs((mid_decimal - last_center_decimal) / last_center_decimal) * Decimal(
+            "10000"
+        )
 
         # Check if exceeds threshold
-        return deviation_bps > cfg.rebalance.recenter_trigger_bps
+        return float(deviation_bps) > cfg.rebalance.recenter_trigger_bps
