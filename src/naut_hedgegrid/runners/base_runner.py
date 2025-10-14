@@ -62,6 +62,7 @@ class BaseRunner(ABC):
         self.console = Console()
         self.shutdown_event = threading.Event()
         self.node: TradingNode | None = None
+        self.ops_manager = None
 
     @abstractmethod
     def create_exec_client_config(
@@ -402,14 +403,19 @@ class BaseRunner(ABC):
         strategy_config: str,
         venue_config: str,
         require_api_keys: bool = False,
+        enable_ops: bool = False,
+        prometheus_port: int = 9090,
+        api_port: int = 8080,
+        api_key: str | None = None,
     ) -> None:
         """Main runner logic.
 
         This method orchestrates the entire trading lifecycle:
         1. Validate environment and load configurations
         2. Create TradingNode with appropriate client configs
-        3. Start trading with event-based main loop
-        4. Handle graceful shutdown with proper cleanup
+        3. Optionally start operational infrastructure (Prometheus + FastAPI)
+        4. Start trading with event-based main loop
+        5. Handle graceful shutdown with proper cleanup
 
         Parameters
         ----------
@@ -419,6 +425,14 @@ class BaseRunner(ABC):
             Path to venue config YAML
         require_api_keys : bool
             If True, API keys are required (for live trading)
+        enable_ops : bool
+            If True, start Prometheus and FastAPI services
+        prometheus_port : int
+            Port for Prometheus metrics endpoint (default 9090)
+        api_port : int
+            Port for FastAPI control endpoints (default 8080)
+        api_key : str | None
+            Optional API key for FastAPI authentication
         """
         self.console.rule(f"[bold cyan]{self.get_runner_name()}[/bold cyan]")
         self.console.print()
@@ -513,6 +527,41 @@ class BaseRunner(ABC):
                 self.console.print("[green]✓[/green] Node started, waiting for bars...")
                 self.console.print()
 
+                # Start operational infrastructure if enabled
+                if enable_ops:
+                    self.console.print("[bold]Starting operational infrastructure...[/bold]")
+                    try:
+                        # Import here to avoid circular dependency
+                        from naut_hedgegrid.ops import OperationsManager
+
+                        # Get strategy instance from node
+                        strategy = self.node.trader.strategy_states()[0]
+
+                        # Initialize ops manager
+                        self.ops_manager = OperationsManager(
+                            strategy=strategy,
+                            instrument_id=instrument_id,
+                            prometheus_port=prometheus_port,
+                            api_port=api_port,
+                            api_key=api_key,
+                        )
+
+                        # Start services
+                        self.ops_manager.start()
+                        self.console.print(
+                            f"[green]✓[/green] Prometheus metrics: http://localhost:{prometheus_port}/metrics"
+                        )
+                        self.console.print(
+                            f"[green]✓[/green] FastAPI endpoints: http://localhost:{api_port}/docs"
+                        )
+                        self.console.print()
+
+                    except Exception as e:  # noqa: BLE001
+                        self.console.print(
+                            f"[yellow]Warning: Failed to start ops infrastructure: {e}[/yellow]"
+                        )
+                        self.ops_manager = None
+
                 # Display running status
                 status_panel = self.get_status_panel(
                     hedge_grid_cfg=hedge_grid_cfg,
@@ -534,6 +583,12 @@ class BaseRunner(ABC):
                 self.console.print("\n[bold]Shutting down...[/bold]")
 
                 try:
+                    # Stop operational infrastructure first
+                    if self.ops_manager is not None:
+                        self.console.print("[cyan]Stopping operational infrastructure...[/cyan]")
+                        self.ops_manager.stop()
+                        self.console.print("[green]✓[/green] Ops infrastructure stopped")
+
                     # Stop node (calls strategy.on_stop() which cancels orders)
                     if exec_client_config:
                         self.console.print("[cyan]Canceling open orders...[/cyan]")

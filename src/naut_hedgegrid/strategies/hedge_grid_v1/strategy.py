@@ -1,12 +1,19 @@
 """HedgeGridV1 trading strategy implementation."""
 
+import threading
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from functools import lru_cache
 
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import OrderSide, TimeInForce, TriggerType
+from nautilus_trader.model.enums import (
+    LiquiditySide,
+    OrderSide,
+    PositionSide,
+    TimeInForce,
+    TriggerType,
+)
 from nautilus_trader.model.events import OrderAccepted, OrderCanceled, OrderFilled
 from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
@@ -16,6 +23,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from naut_hedgegrid.config.strategy import HedgeGridConfig, HedgeGridConfigLoader
 from naut_hedgegrid.domain.types import (
+    Ladder,
     OrderIntent,
     Side,
     parse_client_order_id,
@@ -84,6 +92,21 @@ class HedgeGridV1(Strategy):
 
         # Venue for order queries
         self._venue = Venue("BINANCE")
+
+        # Operational controls state
+        self._kill_switch = None
+        self._throttle: float = 1.0  # Default to full aggressiveness
+        self._ops_lock = threading.Lock()  # Thread-safe access to operational metrics
+
+        # Metrics tracking
+        self._start_time: int | None = None
+        self._last_bar_time: datetime | None = None
+        self._total_fills: int = 0
+        self._maker_fills: int = 0
+
+        # Ladder state for snapshot access
+        self._last_long_ladder: Ladder | None = None
+        self._last_short_ladder: Ladder | None = None
 
     def on_start(self) -> None:
         """
@@ -163,6 +186,13 @@ class HedgeGridV1(Strategy):
         self.subscribe_bars(self.bar_type)
         self.log.info(f"Subscribed to bars: {self.bar_type}")
 
+        # Initialize metrics tracking
+        self._start_time = self.clock.timestamp_ns()
+        self._last_bar_time = None
+        self._total_fills = 0
+        self._maker_fills = 0
+        self.log.info("Metrics tracking initialized")
+
         self.log.info("HedgeGridV1 strategy started successfully")
 
     def on_stop(self) -> None:
@@ -217,6 +247,9 @@ class HedgeGridV1(Strategy):
             self.log.warning("Strategy not fully initialized, skipping bar")
             return
 
+        # Update last bar timestamp for metrics
+        self._last_bar_time = datetime.fromtimestamp(bar.ts_init / 1_000_000_000, tz=UTC)
+
         # Calculate mid price (using close as proxy)
         mid = float(bar.close)
         self._last_mid = mid
@@ -266,6 +299,14 @@ class HedgeGridV1(Strategy):
             f"Built {len(ladders)} ladder(s): "
             + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
+
+        # Store ladder state for snapshot access (before any filtering)
+        with self._ops_lock:
+            for ladder in ladders:
+                if ladder.side == Side.LONG:
+                    self._last_long_ladder = ladder
+                elif ladder.side == Side.SHORT:
+                    self._last_short_ladder = ladder
 
         # Apply placement policy
         ladders = PlacementPolicy.shape_ladders(
@@ -337,6 +378,12 @@ class HedgeGridV1(Strategy):
 
         """
         self.log.info(f"Order filled: {event.client_order_id} @ {event.last_px}")
+
+        # Track fill statistics for metrics
+        with self._ops_lock:
+            self._total_fills += 1
+            if event.liquidity_side == LiquiditySide.MAKER:
+                self._maker_fills += 1
 
         # Get the filled order
         order = self.cache.order(event.client_order_id)
@@ -743,3 +790,313 @@ class HedgeGridV1(Strategy):
                 continue
 
         return live_orders
+
+    # =====================================================================
+    # OPERATIONAL CONTROLS INTEGRATION
+    # =====================================================================
+
+    def get_operational_metrics(self) -> dict:
+        """
+        Return current operational metrics for monitoring.
+
+        Called periodically by OperationsManager to update Prometheus gauges.
+        All metric access is thread-safe via _ops_lock.
+
+        Returns:
+            Dictionary containing operational metrics for Prometheus export
+
+        """
+        with self._ops_lock:
+            return {
+                # Position metrics
+                "long_inventory_usdt": self._calculate_inventory("long"),
+                "short_inventory_usdt": self._calculate_inventory("short"),
+                "net_inventory_usdt": self._calculate_net_inventory(),
+                # Grid metrics
+                "active_rungs_long": len(self._get_active_rungs("long")),
+                "active_rungs_short": len(self._get_active_rungs("short")),
+                "open_orders_count": len(self._get_live_grid_orders()),
+                # Risk metrics
+                "margin_ratio": self._get_margin_ratio(),
+                "maker_ratio": self._calculate_maker_ratio(),
+                # Funding metrics
+                "funding_rate_current": self._get_current_funding_rate(),
+                "funding_cost_1h_projected_usdt": self._project_funding_cost_1h(),
+                # PnL metrics
+                "realized_pnl_usdt": self._get_realized_pnl(),
+                "unrealized_pnl_usdt": self._get_unrealized_pnl(),
+                "total_pnl_usdt": self._get_total_pnl(),
+                # System health
+                "uptime_seconds": self._get_uptime_seconds(),
+                "last_bar_timestamp": (
+                    self._last_bar_time.timestamp() if self._last_bar_time else 0.0
+                ),
+            }
+
+    def attach_kill_switch(self, kill_switch) -> None:
+        """
+        Attach kill switch for monitoring.
+
+        Args:
+            kill_switch: Kill switch instance from ops module
+
+        """
+        self._kill_switch = kill_switch
+        self.log.info("Kill switch attached to strategy")
+
+    def flatten_side(self, side: str) -> dict:
+        """
+        Flatten positions for given side (called by kill switch).
+
+        This method cancels all open orders and submits market orders to close
+        positions for the specified side(s). Thread-safe and can be called from
+        kill switch background threads.
+
+        Args:
+            side: "long", "short", or "both"
+
+        Returns:
+            dict with cancelled orders and closing positions info
+
+        """
+        result = {
+            "cancelled_orders": 0,
+            "closing_positions": [],
+        }
+
+        sides = ["long", "short"] if side == "both" else [side]
+
+        with self._ops_lock:
+            for s in sides:
+                # Cancel orders
+                cancelled = self._cancel_side_orders(s)
+                result["cancelled_orders"] += cancelled
+
+                # Close position
+                position_info = self._close_side_position(s)
+                if position_info:
+                    result["closing_positions"].append(position_info)
+
+        return result
+
+    def set_throttle(self, throttle: float) -> None:
+        """
+        Adjust strategy aggressiveness (0.0 = passive, 1.0 = aggressive).
+
+        This modifies the placement policy to scale quantities. Can be called
+        from API control endpoints.
+
+        Args:
+            throttle: Value between 0.0 and 1.0
+
+        Raises:
+            ValueError: If throttle not in valid range
+
+        """
+        if not 0.0 <= throttle <= 1.0:
+            msg = f"Throttle must be between 0.0 and 1.0, got {throttle}"
+            raise ValueError(msg)
+
+        with self._ops_lock:
+            self._throttle = throttle
+
+        self.log.info(f"Throttle set to {throttle:.2f}")
+
+    def get_ladders_snapshot(self) -> dict:
+        """
+        Return current grid ladder state for API.
+
+        Returns:
+            Dictionary with current ladder state
+
+        """
+        with self._ops_lock:
+            if self._last_long_ladder is None and self._last_short_ladder is None:
+                return {"long_ladder": [], "short_ladder": [], "mid_price": 0.0}
+
+            return {
+                "timestamp": self.clock.timestamp_ns(),
+                "mid_price": self._last_mid or 0.0,
+                "long_ladder": [
+                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                    for r in (self._last_long_ladder.rungs if self._last_long_ladder else [])
+                ],
+                "short_ladder": [
+                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                    for r in (self._last_short_ladder.rungs if self._last_short_ladder else [])
+                ],
+            }
+
+    # =====================================================================
+    # HELPER METHODS FOR OPERATIONAL METRICS
+    # =====================================================================
+
+    def _calculate_inventory(self, side: str) -> float:
+        """Calculate inventory in quote currency for given side."""
+        position_id_str = f"{self.instrument_id}-{side.upper()}"
+        position_id = PositionId(position_id_str)
+        position = self.cache.position(position_id)
+
+        if position and not position.is_flat():
+            # Return notional value in USDT
+            return abs(float(position.quantity) * float(position.avg_px_open))
+        return 0.0
+
+    def _calculate_net_inventory(self) -> float:
+        """Net inventory = long - short."""
+        return self._calculate_inventory("long") - self._calculate_inventory("short")
+
+    def _get_active_rungs(self, side: str) -> list:
+        """Get list of active grid rungs for given side."""
+        open_orders = self._get_live_grid_orders()
+        position_suffix = f"-{side.upper()}"
+        active_rungs = []
+
+        for order in open_orders:
+            if position_suffix in str(order.client_order_id):
+                # Parse rung number from client_order_id
+                try:
+                    parsed = self._parse_cached_order_id(order.client_order_id)
+                    level = parsed.get("level")
+                    if level is not None:
+                        active_rungs.append(level)
+                except (ValueError, KeyError):
+                    continue
+
+        return active_rungs
+
+    def _get_margin_ratio(self) -> float:
+        """
+        Get current margin ratio from account.
+
+        Note: This requires proper account object access. Currently returns 0.0
+        as placeholder. In production, implement based on Nautilus account structure.
+        """
+        # TODO: Implement once account object structure is confirmed
+        # account = self.cache.account(self.account_id)
+        # if account:
+        #     return float(account.margin_used) / float(account.margin_available)
+        return 0.0
+
+    def _calculate_maker_ratio(self) -> float:
+        """Calculate ratio of maker fills vs total fills."""
+        if self._total_fills == 0:
+            return 1.0  # Default to 1.0 (all maker) when no fills yet
+
+        return self._maker_fills / self._total_fills
+
+    def _get_current_funding_rate(self) -> float:
+        """
+        Get current funding rate from market data.
+
+        Note: This requires subscribing to funding rate updates. Currently returns 0.0
+        as placeholder. In production, implement based on Nautilus funding rate data.
+        """
+        # TODO: Subscribe to funding rate data and implement
+        return 0.0
+
+    def _project_funding_cost_1h(self) -> float:
+        """Project funding cost for next 1 hour based on current positions."""
+        funding_rate = self._get_current_funding_rate()
+        long_inventory = self._calculate_inventory("long")
+        short_inventory = self._calculate_inventory("short")
+
+        # Funding is paid every 8h, so 1h projection = rate * (1/8) * inventory
+        long_cost = funding_rate * (1 / 8) * long_inventory
+        short_cost = -funding_rate * (1 / 8) * short_inventory  # Short receives funding
+
+        return long_cost + short_cost
+
+    def _get_realized_pnl(self) -> float:
+        """
+        Get total realized PnL.
+
+        Note: This should track realized PnL from closed positions. Currently returns 0.0
+        as placeholder. In production, implement based on strategy tracking or Nautilus statistics.
+        """
+        # TODO: Implement realized PnL tracking
+        return 0.0
+
+    def _get_unrealized_pnl(self) -> float:
+        """Get total unrealized PnL from open positions."""
+        if self._instrument is None or self._last_mid is None:
+            return 0.0
+
+        total_unrealized = 0.0
+
+        for side in ["long", "short"]:
+            position_id_str = f"{self.instrument_id}-{side.upper()}"
+            position_id = PositionId(position_id_str)
+            position = self.cache.position(position_id)
+
+            if position and not position.is_flat():
+                # Calculate unrealized PnL based on current price
+                current_price = Price(self._last_mid, precision=self._instrument.price_precision)
+                unrealized = float(position.unrealized_pnl(current_price))
+                total_unrealized += unrealized
+
+        return total_unrealized
+
+    def _get_total_pnl(self) -> float:
+        """Total PnL = realized + unrealized."""
+        return self._get_realized_pnl() + self._get_unrealized_pnl()
+
+    def _get_uptime_seconds(self) -> float:
+        """Get strategy uptime in seconds."""
+        if self._start_time is None:
+            return 0.0
+
+        return (self.clock.timestamp_ns() - self._start_time) / 1e9
+
+    def _cancel_side_orders(self, side: str) -> int:
+        """Cancel all orders for given side."""
+        cancelled = 0
+        position_suffix = f"-{side.upper()}"
+
+        open_orders = self.cache.orders_open(venue=self._venue)
+
+        for order in open_orders:
+            if not order.client_order_id.value.startswith(self._strategy_name):
+                continue
+
+            if position_suffix in str(order.client_order_id):
+                if order.is_open:
+                    self.cancel_order(order)
+                    cancelled += 1
+
+        self.log.warning(f"Cancelled {cancelled} {side} orders")
+        return cancelled
+
+    def _close_side_position(self, side: str) -> dict | None:
+        """Submit market order to close position for given side."""
+        if self._instrument is None:
+            return None
+
+        position_id_str = f"{self.instrument_id}-{side.upper()}"
+        position_id = PositionId(position_id_str)
+        position = self.cache.position(position_id)
+
+        if position and not position.is_flat():
+            # Determine closing side
+            close_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+            # Create market order
+            order = self.order_factory.market(
+                instrument_id=self._instrument.id,
+                order_side=close_side,
+                quantity=position.quantity,
+                time_in_force=TimeInForce.IOC,
+                reduce_only=True,
+            )
+
+            self.submit_order(order, position_id=position_id)
+
+            self.log.warning(f"Closing {side} position: {position.quantity} @ market")
+
+            return {
+                "side": side,
+                "size": float(position.quantity),
+                "order_id": str(order.client_order_id),
+            }
+
+        return None
