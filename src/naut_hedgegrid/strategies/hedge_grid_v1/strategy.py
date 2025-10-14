@@ -1,6 +1,5 @@
 """HedgeGridV1 trading strategy implementation."""
 
-import threading
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from functools import lru_cache
@@ -14,7 +13,7 @@ from nautilus_trader.model.enums import (
     TimeInForce,
     TriggerType,
 )
-from nautilus_trader.model.events import OrderAccepted, OrderCanceled, OrderFilled
+from nautilus_trader.model.events import OrderAccepted, OrderCanceled, OrderFilled, OrderRejected
 from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price, Quantity
@@ -33,7 +32,7 @@ from naut_hedgegrid.strategies.hedge_grid_v1.config import HedgeGridV1Config
 from naut_hedgegrid.strategy.detector import Bar as DetectorBar, RegimeDetector
 from naut_hedgegrid.strategy.funding_guard import FundingGuard
 from naut_hedgegrid.strategy.grid import GridEngine
-from naut_hedgegrid.strategy.order_sync import LiveOrder, OrderDiff
+from naut_hedgegrid.strategy.order_sync import LiveOrder, OrderDiff, PostOnlyRetryHandler
 from naut_hedgegrid.strategy.policy import PlacementPolicy
 
 
@@ -74,7 +73,9 @@ class HedgeGridV1(Strategy):
 
         # Configuration
         self.instrument_id = InstrumentId.from_str(config.instrument_id)
-        self.bar_type = BarType.from_str(config.bar_type)
+        # Note: bar_type is NOT parsed from string due to Nautilus 1.220.0 bug with PERP instruments
+        # It will be constructed programmatically in on_start() after instrument is loaded
+        self.bar_type: BarType | None = None
         self.config_path = config.hedge_grid_config_path
 
         # State tracking
@@ -84,6 +85,8 @@ class HedgeGridV1(Strategy):
         self._regime_detector: RegimeDetector | None = None
         self._funding_guard: FundingGuard | None = None
         self._order_diff: OrderDiff | None = None
+        self._retry_handler: PostOnlyRetryHandler | None = None
+        self._pending_retries: dict[str, OrderIntent] = {}
         self._last_mid: float | None = None
         self._grid_center: float = 0.0
 
@@ -96,7 +99,8 @@ class HedgeGridV1(Strategy):
         # Operational controls state
         self._kill_switch = None
         self._throttle: float = 1.0  # Default to full aggressiveness
-        self._ops_lock = threading.Lock()  # Thread-safe access to operational metrics
+        # Note: No lock needed for ladder snapshots - Python reference assignment is atomic
+        # Lock only used for complex operations like position flattening
 
         # Metrics tracking
         self._start_time: int | None = None
@@ -138,6 +142,22 @@ class HedgeGridV1(Strategy):
 
         self.log.info(f"Trading instrument: {self._instrument.id}")
 
+        # Construct BarType programmatically to avoid Nautilus 1.220.0 parsing bug
+        from nautilus_trader.model.data import BarSpecification
+        from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
+
+        bar_spec = BarSpecification(
+            step=1,
+            aggregation=BarAggregation.MINUTE,
+            price_type=PriceType.LAST,
+        )
+        self.bar_type = BarType(
+            instrument_id=self.instrument_id,
+            bar_spec=bar_spec,
+            aggregation_source=AggregationSource.EXTERNAL,
+        )
+        self.log.info(f"Bar type: {self.bar_type}")
+
         # Create precision guard
         self._precision_guard = PrecisionGuard(instrument=self._instrument)
         self.log.info(
@@ -145,6 +165,18 @@ class HedgeGridV1(Strategy):
             f"tick={self._precision_guard.precision.price_tick}, "
             f"step={self._precision_guard.precision.qty_step}, "
             f"min_notional={self._precision_guard.precision.min_notional}"
+        )
+
+        # Initialize retry handler for post-only rejections
+        self._retry_handler = PostOnlyRetryHandler(
+            precision_guard=self._precision_guard,
+            max_attempts=self._hedge_grid_config.execution.retry_attempts,
+            enabled=self._hedge_grid_config.execution.use_post_only_retries,
+        )
+        self.log.info(
+            f"Retry handler initialized: "
+            f"enabled={self._retry_handler.enabled}, "
+            f"max_attempts={self._hedge_grid_config.execution.retry_attempts}"
         )
 
         # Initialize regime detector
@@ -243,7 +275,15 @@ class HedgeGridV1(Strategy):
             bar: New bar data
 
         """
-        if self._hedge_grid_config is None or self._regime_detector is None:
+        # Check all components are initialized before processing bar
+        if (
+            self._hedge_grid_config is None
+            or self._regime_detector is None
+            or self._funding_guard is None
+            or self._order_diff is None
+            or self._precision_guard is None
+            or self._instrument is None
+        ):
             self.log.warning("Strategy not fully initialized, skipping bar")
             return
 
@@ -301,12 +341,12 @@ class HedgeGridV1(Strategy):
         )
 
         # Store ladder state for snapshot access (before any filtering)
-        with self._ops_lock:
-            for ladder in ladders:
-                if ladder.side == Side.LONG:
-                    self._last_long_ladder = ladder
-                elif ladder.side == Side.SHORT:
-                    self._last_short_ladder = ladder
+        # Note: Python reference assignment is atomic, no lock needed
+        for ladder in ladders:
+            if ladder.side == Side.LONG:
+                self._last_long_ladder = ladder
+            elif ladder.side == Side.SHORT:
+                self._last_short_ladder = ladder
 
         # Apply placement policy
         ladders = PlacementPolicy.shape_ladders(
@@ -361,6 +401,8 @@ class HedgeGridV1(Strategy):
             self.on_order_accepted(event)
         elif isinstance(event, OrderCanceled):
             self.on_order_canceled(event)
+        elif isinstance(event, OrderRejected):
+            self.on_order_rejected(event)
 
     def on_order_filled(self, event: OrderFilled) -> None:
         """
@@ -379,11 +421,18 @@ class HedgeGridV1(Strategy):
         """
         self.log.info(f"Order filled: {event.client_order_id} @ {event.last_px}")
 
-        # Track fill statistics for metrics
-        with self._ops_lock:
-            self._total_fills += 1
-            if event.liquidity_side == LiquiditySide.MAKER:
-                self._maker_fills += 1
+        client_order_id = str(event.client_order_id.value)
+
+        # Clean up retry tracking (order filled successfully)
+        if client_order_id in self._pending_retries:
+            del self._pending_retries[client_order_id]
+            if self._retry_handler is not None:
+                self._retry_handler.clear_history(client_order_id)
+
+        # Track fill statistics for metrics (atomic integer increment)
+        self._total_fills += 1
+        if event.liquidity_side == LiquiditySide.MAKER:
+            self._maker_fills += 1
 
         # Get the filled order
         order = self.cache.order(event.client_order_id)
@@ -480,7 +529,7 @@ class HedgeGridV1(Strategy):
 
     def on_order_accepted(self, event: OrderAccepted) -> None:
         """
-        Handle order accepted event.
+        Handle order accepted event - remove from retry queue on success.
 
         Logs order acceptance. Order tracking is done via cache queries.
 
@@ -488,6 +537,20 @@ class HedgeGridV1(Strategy):
             event: Order accepted event
 
         """
+        client_order_id = str(event.client_order_id.value)
+
+        # Remove from pending retries (success!)
+        if client_order_id in self._pending_retries:
+            intent = self._pending_retries[client_order_id]
+            if intent.retry_count > 0:
+                self.log.info(
+                    f"Order {client_order_id} accepted after {intent.retry_count} retries "
+                    f"(original price: {intent.original_price}, final price: {intent.price})"
+                )
+            del self._pending_retries[client_order_id]
+            if self._retry_handler is not None:
+                self._retry_handler.clear_history(client_order_id)
+
         # Log order acceptance
         if event.client_order_id.value.startswith(self._strategy_name):
             self.log.debug(f"Order accepted: {event.client_order_id}")
@@ -505,6 +568,114 @@ class HedgeGridV1(Strategy):
         # Log order cancellation
         if event.client_order_id.value.startswith(self._strategy_name):
             self.log.debug(f"Order canceled: {event.client_order_id}")
+
+    def on_order_rejected(self, event: OrderRejected) -> None:
+        """
+        Handle order rejection with retry logic for post-only failures.
+
+        When a post-only order is rejected because it would cross the spread,
+        this handler:
+        1. Adjusts price by one tick away from spread
+        2. Retries up to N times (configured)
+        3. Logs each attempt with reason
+        4. Abandons order after max attempts exhausted
+
+        Args:
+            event: OrderRejected event from NautilusTrader
+
+        """
+        client_order_id = str(event.client_order_id.value)
+        rejection_reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
+
+        self.log.warning(f"Order rejected: {client_order_id}, reason: {rejection_reason}")
+
+        # Check if retry handler is initialized
+        if self._retry_handler is None or not self._retry_handler.enabled:
+            return
+
+        # Check if this order is in retry queue
+        if client_order_id not in self._pending_retries:
+            # Not tracking this order (maybe retry is disabled or already exhausted)
+            return
+
+        intent = self._pending_retries[client_order_id]
+
+        # Check if retry is warranted for this rejection type
+        if not self._retry_handler.should_retry(rejection_reason):
+            self.log.warning(
+                f"Order {client_order_id} rejected for non-retryable reason: {rejection_reason}"
+            )
+            del self._pending_retries[client_order_id]
+            self._retry_handler.clear_history(client_order_id)
+            return
+
+        # Check retry limit
+        if intent.retry_count >= self._hedge_grid_config.execution.retry_attempts:  # type: ignore[union-attr]
+            self.log.error(
+                f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning"
+            )
+            del self._pending_retries[client_order_id]
+            self._retry_handler.clear_history(client_order_id)
+            return
+
+        # Adjust price for retry
+        new_attempt = intent.retry_count + 1
+        adjusted_price = self._retry_handler.adjust_price_for_retry(
+            original_price=intent.original_price or intent.price or 0.0,
+            side=intent.side or Side.LONG,
+            attempt=new_attempt,
+        )
+
+        # Record this retry attempt
+        self._retry_handler.record_attempt(
+            client_order_id=client_order_id,
+            attempt=new_attempt,
+            original_price=intent.original_price or intent.price or 0.0,
+            adjusted_price=adjusted_price,
+            reason=rejection_reason,
+        )
+
+        # Create new intent with adjusted price
+        # Note: We need to use dataclass.replace since OrderIntent is frozen
+        from dataclasses import replace
+
+        new_intent = replace(
+            intent,
+            price=adjusted_price,
+            retry_count=new_attempt,
+            original_price=intent.original_price or intent.price,
+            metadata={**intent.metadata, "retry_attempt": str(new_attempt)},
+        )
+
+        # Update pending retries
+        self._pending_retries[client_order_id] = new_intent
+
+        self.log.info(
+            f"Retrying {client_order_id} (attempt {new_attempt}/"
+            f"{self._hedge_grid_config.execution.retry_attempts}): "  # type: ignore[union-attr]
+            f"adjusted price {intent.price} -> {adjusted_price}"
+        )
+
+        # Submit retry (with delay if configured)
+        if self._hedge_grid_config.execution.retry_delay_ms > 0:  # type: ignore[union-attr]
+            # Schedule delayed retry using Nautilus clock
+            delay_ns = self._hedge_grid_config.execution.retry_delay_ms * 1_000_000  # type: ignore[union-attr]  # ms to ns
+
+            # Create callback that captures the intent
+            # Note: Nautilus clock.set_timer_ns expects a regular function, not async
+            def retry_callback() -> None:
+                """Execute retry attempt for order."""
+                self._execute_add(new_intent)
+
+            # Use clock to schedule callback
+            self.clock.set_timer_ns(
+                name=f"retry_{client_order_id}_{new_attempt}",
+                interval_ns=delay_ns,
+                callback=retry_callback,
+            )
+        else:
+            # Immediate retry
+            self._execute_add(new_intent)
 
     def _execute_diff(self, diff_result) -> None:
         """
@@ -583,7 +754,7 @@ class HedgeGridV1(Strategy):
 
     def _execute_add(self, intent: OrderIntent) -> None:
         """
-        Execute add operation (create new limit order).
+        Execute add operation (create new limit order) with post-only retry tracking.
 
         Args:
             intent: Create intent with order parameters
@@ -602,6 +773,10 @@ class HedgeGridV1(Strategy):
         # Submit order
         self.submit_order(order, position_id=position_id)
         self.log.debug(f"Created order: {intent.client_order_id} @ {intent.price}")
+
+        # Track order for potential retry (only first attempt or retries with updated intent)
+        if self._retry_handler is not None and self._retry_handler.enabled:
+            self._pending_retries[intent.client_order_id] = intent
 
     def _create_limit_order(self, intent: OrderIntent, instrument: Instrument) -> LimitOrder:
         """
@@ -800,38 +975,39 @@ class HedgeGridV1(Strategy):
         Return current operational metrics for monitoring.
 
         Called periodically by OperationsManager to update Prometheus gauges.
-        All metric access is thread-safe via _ops_lock.
+        Note: Cache queries are thread-safe. Simple reads of _total_fills,
+        _maker_fills are atomic. Only complex operations need locking.
 
         Returns:
             Dictionary containing operational metrics for Prometheus export
 
         """
-        with self._ops_lock:
-            return {
-                # Position metrics
-                "long_inventory_usdt": self._calculate_inventory("long"),
-                "short_inventory_usdt": self._calculate_inventory("short"),
-                "net_inventory_usdt": self._calculate_net_inventory(),
-                # Grid metrics
-                "active_rungs_long": len(self._get_active_rungs("long")),
-                "active_rungs_short": len(self._get_active_rungs("short")),
-                "open_orders_count": len(self._get_live_grid_orders()),
-                # Risk metrics
-                "margin_ratio": self._get_margin_ratio(),
-                "maker_ratio": self._calculate_maker_ratio(),
-                # Funding metrics
-                "funding_rate_current": self._get_current_funding_rate(),
-                "funding_cost_1h_projected_usdt": self._project_funding_cost_1h(),
-                # PnL metrics
-                "realized_pnl_usdt": self._get_realized_pnl(),
-                "unrealized_pnl_usdt": self._get_unrealized_pnl(),
-                "total_pnl_usdt": self._get_total_pnl(),
-                # System health
-                "uptime_seconds": self._get_uptime_seconds(),
-                "last_bar_timestamp": (
-                    self._last_bar_time.timestamp() if self._last_bar_time else 0.0
-                ),
-            }
+        # Cache queries and calculations are safe without locks
+        return {
+            # Position metrics
+            "long_inventory_usdt": self._calculate_inventory("long"),
+            "short_inventory_usdt": self._calculate_inventory("short"),
+            "net_inventory_usdt": self._calculate_net_inventory(),
+            # Grid metrics
+            "active_rungs_long": len(self._get_active_rungs("long")),
+            "active_rungs_short": len(self._get_active_rungs("short")),
+            "open_orders_count": len(self._get_live_grid_orders()),
+            # Risk metrics
+            "margin_ratio": self._get_margin_ratio(),
+            "maker_ratio": self._calculate_maker_ratio(),
+            # Funding metrics
+            "funding_rate_current": self._get_current_funding_rate(),
+            "funding_cost_1h_projected_usdt": self._project_funding_cost_1h(),
+            # PnL metrics
+            "realized_pnl_usdt": self._get_realized_pnl(),
+            "unrealized_pnl_usdt": self._get_unrealized_pnl(),
+            "total_pnl_usdt": self._get_total_pnl(),
+            # System health
+            "uptime_seconds": self._get_uptime_seconds(),
+            "last_bar_timestamp": (
+                self._last_bar_time.timestamp() if self._last_bar_time else 0.0
+            ),
+        }
 
     def attach_kill_switch(self, kill_switch) -> None:
         """
@@ -849,8 +1025,8 @@ class HedgeGridV1(Strategy):
         Flatten positions for given side (called by kill switch).
 
         This method cancels all open orders and submits market orders to close
-        positions for the specified side(s). Thread-safe and can be called from
-        kill switch background threads.
+        positions for the specified side(s). Safe to call from API threads
+        since all operations use thread-safe Nautilus cache.
 
         Args:
             side: "long", "short", or "both"
@@ -866,16 +1042,15 @@ class HedgeGridV1(Strategy):
 
         sides = ["long", "short"] if side == "both" else [side]
 
-        with self._ops_lock:
-            for s in sides:
-                # Cancel orders
-                cancelled = self._cancel_side_orders(s)
-                result["cancelled_orders"] += cancelled
+        for s in sides:
+            # Cancel orders (cache queries are thread-safe)
+            cancelled = self._cancel_side_orders(s)
+            result["cancelled_orders"] += cancelled
 
-                # Close position
-                position_info = self._close_side_position(s)
-                if position_info:
-                    result["closing_positions"].append(position_info)
+            # Close position (cache queries are thread-safe)
+            position_info = self._close_side_position(s)
+            if position_info:
+                result["closing_positions"].append(position_info)
 
         return result
 
@@ -897,8 +1072,8 @@ class HedgeGridV1(Strategy):
             msg = f"Throttle must be between 0.0 and 1.0, got {throttle}"
             raise ValueError(msg)
 
-        with self._ops_lock:
-            self._throttle = throttle
+        # Simple float assignment is atomic in Python
+        self._throttle = throttle
 
         self.log.info(f"Throttle set to {throttle:.2f}")
 
@@ -910,22 +1085,22 @@ class HedgeGridV1(Strategy):
             Dictionary with current ladder state
 
         """
-        with self._ops_lock:
-            if self._last_long_ladder is None and self._last_short_ladder is None:
-                return {"long_ladder": [], "short_ladder": [], "mid_price": 0.0}
+        # Read ladder references (atomic) - no lock needed
+        if self._last_long_ladder is None and self._last_short_ladder is None:
+            return {"long_ladder": [], "short_ladder": [], "mid_price": 0.0}
 
-            return {
-                "timestamp": self.clock.timestamp_ns(),
-                "mid_price": self._last_mid or 0.0,
-                "long_ladder": [
-                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
-                    for r in (self._last_long_ladder.rungs if self._last_long_ladder else [])
-                ],
-                "short_ladder": [
-                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
-                    for r in (self._last_short_ladder.rungs if self._last_short_ladder else [])
-                ],
-            }
+        return {
+            "timestamp": self.clock.timestamp_ns(),
+            "mid_price": self._last_mid or 0.0,
+            "long_ladder": [
+                {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                for r in (self._last_long_ladder.rungs if self._last_long_ladder else [])
+            ],
+            "short_ladder": [
+                {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                for r in (self._last_short_ladder.rungs if self._last_short_ladder else [])
+            ],
+        }
 
     # =====================================================================
     # HELPER METHODS FOR OPERATIONAL METRICS

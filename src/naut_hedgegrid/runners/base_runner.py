@@ -34,9 +34,10 @@ from nautilus_trader.model.identifiers import InstrumentId
 from rich.console import Console
 from rich.panel import Panel
 
+from nautilus_trader.config import ImportableStrategyConfig
+
 from naut_hedgegrid.config.strategy import HedgeGridConfig, HedgeGridConfigLoader
 from naut_hedgegrid.config.venue import VenueConfig, VenueConfigLoader
-from naut_hedgegrid.strategies.hedge_grid_v1 import HedgeGridV1Config
 
 
 class BaseRunner(ABC):
@@ -166,11 +167,11 @@ class BaseRunner(ABC):
         strategy_config_path: Path,
         hedge_grid_cfg: HedgeGridConfig,
         venue_cfg: VenueConfig,
-    ) -> HedgeGridV1Config:
+    ) -> ImportableStrategyConfig:
         """Load strategy configuration for TradingNode.
 
-        Creates a HedgeGridV1Config that wraps the hedge grid configuration
-        and provides the necessary parameters for Nautilus TradingNode integration.
+        Creates an ImportableStrategyConfig that tells Nautilus how to load
+        the HedgeGridV1 strategy with the necessary parameters.
 
         Parameters
         ----------
@@ -183,24 +184,27 @@ class BaseRunner(ABC):
 
         Returns
         -------
-        HedgeGridV1Config
+        ImportableStrategyConfig
             Strategy config ready for TradingNode
         """
         # Extract instrument ID
         instrument_id = hedge_grid_cfg.strategy.instrument_id
 
-        # Create bar type string (Nautilus format: BTCUSDT-PERP.BINANCE-1-MINUTE-LAST)
-        bar_type_str = f"{instrument_id}-1-MINUTE-LAST"
-
         # Determine OMS type from venue config
         oms_type = OmsType.HEDGING if venue_cfg.trading.hedge_mode else OmsType.NETTING
 
-        # Create HedgeGridV1Config
-        return HedgeGridV1Config(
-            instrument_id=instrument_id,
-            bar_type=bar_type_str,
-            hedge_grid_config_path=str(strategy_config_path),
-            oms_type=oms_type,
+        # Create ImportableStrategyConfig
+        # This is the correct Nautilus 1.220.0 pattern - use ImportableStrategyConfig directly
+        # Do NOT subclass it! Just provide the paths and config dict.
+        # Note: bar_type is NOT included - strategy constructs it programmatically to avoid parsing bug
+        return ImportableStrategyConfig(
+            strategy_path="naut_hedgegrid.strategies.hedge_grid_v1.strategy:HedgeGridV1",
+            config_path="naut_hedgegrid.strategies.hedge_grid_v1.config:HedgeGridV1Config",
+            config={
+                "instrument_id": instrument_id,
+                "hedge_grid_config_path": str(strategy_config_path),
+                "oms_type": oms_type.value,
+            },
         )
 
     def create_bar_type(self, instrument_id_str: str) -> BarType:
@@ -266,7 +270,7 @@ class BaseRunner(ABC):
         return BinanceDataClientConfig(
             api_key=api_key,
             api_secret=api_secret,
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             testnet=venue_cfg.api.testnet,
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
             instrument_provider=InstrumentProviderConfig(
@@ -277,7 +281,7 @@ class BaseRunner(ABC):
 
     def create_node_config(
         self,
-        strategy_config: HedgeGridV1Config,
+        strategy_config: ImportableStrategyConfig,
         data_client_config: BinanceDataClientConfig,
         exec_client_config: BinanceExecClientConfig | None = None,
     ) -> TradingNodeConfig:
@@ -285,7 +289,7 @@ class BaseRunner(ABC):
 
         Parameters
         ----------
-        strategy_config : HedgeGridV1Config
+        strategy_config : ImportableStrategyConfig
             Strategy configuration
         data_client_config : BinanceDataClientConfig
             Data client configuration
@@ -307,7 +311,6 @@ class BaseRunner(ABC):
             data_clients={BINANCE: data_client_config},
             exec_clients=exec_clients,
             strategies=[strategy_config],
-            log_level="INFO",
         )
 
     def validate_environment(self, require_api_keys: bool = False) -> tuple[str | None, str | None]:
@@ -495,12 +498,12 @@ class BaseRunner(ABC):
 
             # Display configuration summary
             symbol = instrument_id.split("-")[0]
-            self.console.print("[green]✓[/green] Data client configured: BINANCE (USDT_FUTURE)")
+            self.console.print("[green]✓[/green] Data client configured: BINANCE (USDT_FUTURES)")
             self.console.print(f"[green]✓[/green] Instrument subscription: {symbol}")
 
             if exec_client_config:
                 self.console.print(
-                    "[green]✓[/green] Execution client configured: BINANCE (USDT_FUTURE)"
+                    "[green]✓[/green] Execution client configured: BINANCE (USDT_FUTURES)"
                 )
                 hedge_status = "enabled" if venue_cfg.trading.hedge_mode else "disabled"
                 self.console.print(
@@ -523,7 +526,7 @@ class BaseRunner(ABC):
                 self.node.build()
                 self.console.print("[green]✓[/green] Node built successfully")
 
-                self.node.start()
+                self.node.run()
                 self.console.print("[green]✓[/green] Node started, waiting for bars...")
                 self.console.print()
 
@@ -748,7 +751,7 @@ class LiveRunner(BaseRunner):
         return BinanceExecClientConfig(
             api_key=api_key,
             api_secret=api_secret,
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             testnet=venue_cfg.api.testnet,
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
             use_reduce_only=False,  # CRITICAL: False for hedge mode
