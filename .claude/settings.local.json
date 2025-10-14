@@ -9,7 +9,8 @@
       "Read(//Users/giovanni/Library/**)",
       "Bash(cd:*)",
       "Bash(make:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:nautilustrader.io)"
     ],
     "deny": [],
     "ask": []
