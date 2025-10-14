@@ -38,6 +38,11 @@ rate_limits:
 
 # WebSocket Configuration
 websocket:
-  ping_interval: 30
+  ping_interval: 20
   reconnect_timeout: 60
-  max_reconnect_attempts: 10
+  max_reconnect_attempts: 5
+
+# Instruments to load and trade
+symbols:
+  - BTCUSDT-PERP
+  - ETHUSDT-PERP
