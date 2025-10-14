@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "WebFetch(domain:docs.nautilustrader.io)"
     ],
     "deny": [],
     "ask": []

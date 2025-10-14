@@ -1,0 +1,31 @@
+{
+  "files": {
+    "trades": {
+      "file_path": "btcusdt_trades.csv",
+      "columns": {
+        "timestamp": "time",
+        "price": "price",
+        "size": "amount",
+        "aggressor_side": "side",
+        "trade_id": "id"
+      },
+      "timestamp_format": "%Y-%m-%d %H:%M:%S"
+    },
+    "mark": {
+      "file_path": "btcusdt_mark_prices.csv.gz",
+      "columns": {
+        "timestamp": "datetime",
+        "mark_price": "mark"
+      }
+    },
+    "funding": {
+      "file_path": "btcusdt_funding.csv",
+      "columns": {
+        "timestamp": "time",
+        "funding_rate": "rate",
+        "next_funding_time": "next_funding"
+      }
+    }
+  },
+  "base_path": "./data/raw"
+}

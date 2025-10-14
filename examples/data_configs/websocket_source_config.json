@@ -1,0 +1,14 @@
+{
+  "files": {
+    "trades": {
+      "file_path": "btcusdt_aggTrade.jsonl"
+    },
+    "mark": {
+      "file_path": "btcusdt_markPrice.jsonl.gz"
+    },
+    "funding": {
+      "file_path": "btcusdt_markPrice.jsonl.gz"
+    }
+  },
+  "base_path": "./data/websocket_captures"
+}
