@@ -8,6 +8,7 @@ from naut_hedgegrid.config.strategy import (
     FundingConfig,
     GridConfig,
     HedgeGridConfig,
+    PolicyConfig,
     PositionConfig,
     RebalanceConfig,
     RegimeConfig,
@@ -61,6 +62,11 @@ def create_test_config(
             emergency_liquidation_buffer=0.15,
         ),
         regime=RegimeConfig(adx_len=14, ema_fast=20, ema_slow=50, atr_len=14, hysteresis_bps=25.0),
+        policy=PolicyConfig(
+            strategy="throttled-counter",
+            counter_levels=3,
+            counter_qty_scale=0.5,
+        ),
     )
 
 

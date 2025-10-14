@@ -169,6 +169,11 @@ position:
   max_position_size: 1.0
   max_leverage_used: 5.0
   emergency_liquidation_buffer: 0.15
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 3
+  counter_qty_scale: 0.5
 """)
 
     config = HedgeGridConfigLoader.load(config_file)
@@ -224,6 +229,11 @@ position:
   max_position_size: 1.0
   max_leverage_used: 5.0
   emergency_liquidation_buffer: 0.15
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 3
+  counter_qty_scale: 0.5
 """)
 
     with pytest.raises(ConfigError, match="validation failed"):
@@ -354,6 +364,11 @@ position:
   max_position_size: 1.0
   max_leverage_used: 5.0
   emergency_liquidation_buffer: 0.15
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 3
+  counter_qty_scale: 0.5
 """)
 
     with pytest.raises(ConfigError) as exc_info:

@@ -1,5 +1,7 @@
 """Strategy configuration models."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from naut_hedgegrid.config.base import BaseYamlConfigLoader
@@ -113,6 +115,27 @@ class PositionConfig(BaseModel):
     )
 
 
+class PolicyConfig(BaseModel):
+    """Placement policy for inventory biasing by regime."""
+
+    strategy: Literal["core-and-scalp", "throttled-counter"] = Field(
+        description=(
+            "Placement strategy: core-and-scalp (thin on both) "
+            "or throttled-counter (full with trend)"
+        )
+    )
+    counter_levels: int = Field(
+        ge=0,
+        le=20,
+        description="Number of levels to maintain on counter-trend side (0 = disable counter-side)",
+    )
+    counter_qty_scale: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Quantity scaling factor for counter-trend side (0.0-1.0, 1.0 = no reduction)",
+    )
+
+
 class HedgeGridConfig(BaseModel):
     """
     Complete hedge grid strategy configuration.
@@ -130,6 +153,7 @@ class HedgeGridConfig(BaseModel):
     funding: FundingConfig = Field(description="Funding rate filter")
     regime: RegimeConfig = Field(description="Regime detection")
     position: PositionConfig = Field(description="Position sizing")
+    policy: PolicyConfig = Field(description="Placement policy for inventory biasing")
 
 
 class HedgeGridConfigLoader(BaseYamlConfigLoader):
