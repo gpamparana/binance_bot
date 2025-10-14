@@ -199,7 +199,7 @@ tests/strategy/test_strategy_smoke.py::test_full_lifecycle_regime_transition PAS
 ## File Locations
 
 ```
-naut-hedgegrid/
+binance_bot/                                 # Repository root
 ├── tests/
 │   └── strategy/
 │       ├── test_strategy_smoke.py          # Main test file (1,150 lines, 30 tests)
@@ -213,7 +213,7 @@ naut-hedgegrid/
 │               ├── __init__.py
 │               ├── config.py               # HedgeGridV1Config
 │               └── strategy.py             # HedgeGridV1 (to be implemented)
-└── pytest.ini  # Pytest configuration
+└── pytest.ini  # Pytest configuration (if present)
 ```
 
 ## Next Steps After Smoke Tests Pass
