@@ -1,0 +1,221 @@
+# Docker Compose configuration for NautilusTrader HedgeGrid Trading System
+#
+# Services:
+#   - backtest: One-shot backtest execution
+#   - paper: Long-running paper trading with operational infrastructure
+#   - live: Long-running live trading with operational infrastructure
+#
+# Usage:
+#   Build:        docker compose build
+#   Backtest:     docker compose run --rm backtest
+#   Paper:        docker compose --profile paper up -d
+#   Live:         docker compose --profile live up -d
+#   Logs:         docker compose logs -f paper
+#   Stop:         docker compose --profile paper down
+#   Status:       docker compose exec paper python -m naut_hedgegrid status
+#   Flatten:      docker compose exec paper python -m naut_hedgegrid flatten --side LONG
+
+# Note: 'version' field is obsolete in modern Docker Compose and has been removed
+
+services:
+  # ==========================================================================
+  # Backtest Service - One-shot backtest execution
+  # ==========================================================================
+  backtest:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-2024-01-01}
+        VCS_REF: ${VCS_REF:-dev}
+        VERSION: ${VERSION:-0.1.0}
+    image: naut-hedgegrid:latest
+    container_name: hedgegrid-backtest
+    command: >
+      python -m naut_hedgegrid backtest
+      --backtest-config /app/configs/backtest/btcusdt_mark_trades_funding.yaml
+      --strategy-config /app/configs/strategies/hedge_grid_v1.yaml
+      --output-dir /app/artifacts
+    volumes:
+      # Data catalog (read-only)
+      - ./data:/app/data:ro
+      # Output artifacts (read-write)
+      - ./artifacts:/app/artifacts
+      # Config files (read-only)
+      - ./configs:/app/configs:ro
+    environment:
+      # Python output buffering disabled for real-time logs
+      - PYTHONUNBUFFERED=1
+      # Optional: Set log level
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Profile: only start when explicitly requested
+    profiles:
+      - backtest
+
+  # ==========================================================================
+  # Paper Trading Service - Simulated execution with live data
+  # ==========================================================================
+  paper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-2024-01-01}
+        VCS_REF: ${VCS_REF:-dev}
+        VERSION: ${VERSION:-0.1.0}
+    image: naut-hedgegrid:latest
+    container_name: hedgegrid-paper
+    command: >
+      python -m naut_hedgegrid paper
+      --strategy-config /app/configs/strategies/hedge_grid_v1.yaml
+      --venue-config /app/configs/venues/binance_futures.yaml
+      --enable-ops
+      --prometheus-port 9090
+      --api-port 8080
+    ports:
+      # Prometheus metrics endpoint
+      - "9090:9090"
+      # FastAPI control endpoints
+      - "8080:8080"
+    volumes:
+      # Data directory (read-write for storing data)
+      - ./data:/app/data
+      # Artifacts directory (read-write for logs/reports)
+      - ./artifacts:/app/artifacts
+      # Config files (read-only)
+      - ./configs:/app/configs:ro
+    environment:
+      # Python output buffering disabled
+      - PYTHONUNBUFFERED=1
+      # Binance API credentials (optional for paper trading - public data only)
+      - BINANCE_API_KEY=${BINANCE_API_KEY:-}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET:-}
+      # Log level
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Restart policy
+    restart: unless-stopped
+    # Health check (requires API server to be running)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5) if True else exit(1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Profile: only start when explicitly requested
+    profiles:
+      - paper
+
+  # ==========================================================================
+  # Live Trading Service - REAL execution with REAL money
+  # ==========================================================================
+  live:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-2024-01-01}
+        VCS_REF: ${VCS_REF:-dev}
+        VERSION: ${VERSION:-0.1.0}
+    image: naut-hedgegrid:latest
+    container_name: hedgegrid-live
+    command: >
+      python -m naut_hedgegrid live
+      --strategy-config /app/configs/strategies/hedge_grid_v1.yaml
+      --venue-config /app/configs/venues/binance_futures.yaml
+      --enable-ops
+      --prometheus-port 9090
+      --api-port 8080
+    ports:
+      # Prometheus metrics (different host port to avoid conflicts)
+      - "9091:9090"
+      # FastAPI control (different host port to avoid conflicts)
+      - "8081:8080"
+    volumes:
+      # Data directory (read-write)
+      - ./data:/app/data
+      # Artifacts directory (read-write for logs/reports)
+      - ./artifacts:/app/artifacts
+      # Config files (read-only)
+      - ./configs:/app/configs:ro
+    environment:
+      # Python output buffering disabled
+      - PYTHONUNBUFFERED=1
+      # Binance API credentials (REQUIRED for live trading)
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      # Log level
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    # Restart policy (will restart on crashes)
+    restart: unless-stopped
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5) if True else exit(1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits (more conservative for live trading)
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    # Logging configuration (more retention for live trading)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "10"
+    # Profile: only start when explicitly requested
+    profiles:
+      - live
+
+# ==============================================================================
+# Named Volumes (optional - for production deployments)
+# ==============================================================================
+# Uncomment these if you want to use named volumes instead of bind mounts
+# volumes:
+#   data:
+#     driver: local
+#   artifacts:
+#     driver: local
+
+# ==============================================================================
+# Networks (optional - for multi-service deployments)
+# ==============================================================================
+# networks:
+#   trading-net:
+#     driver: bridge
