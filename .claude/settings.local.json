@@ -8,7 +8,8 @@
       "Bash(uv:*)",
       "Read(//Users/giovanni/Library/**)",
       "Bash(cd:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []
