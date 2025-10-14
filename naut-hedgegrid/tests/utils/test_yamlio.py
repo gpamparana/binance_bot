@@ -75,7 +75,7 @@ def test_read_yaml_env_var_missing_no_default(tmp_path: Path) -> None:
     yaml_file = tmp_path / "env_missing.yaml"
     yaml_file.write_text("key: ${NONEXISTENT_VAR}\n")
 
-    with pytest.raises(YamlIOError, match="Environment variable.*not found"):
+    with pytest.raises(YamlIOError, match=r"Environment variable.*not found"):
         read_yaml(yaml_file, resolve_env=True)
 
 
