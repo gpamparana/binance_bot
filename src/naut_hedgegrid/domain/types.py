@@ -261,6 +261,8 @@ class OrderIntent:
     qty: float | None = None
     replace_with: str | None = None  # New client_order_id for REPLACE action
     metadata: dict[str, str] = field(default_factory=dict)
+    retry_count: int = 0  # Number of retries attempted so far
+    original_price: float | None = None  # Original price before any adjustments
 
     def __post_init__(self) -> None:
         """Validate order intent parameters."""

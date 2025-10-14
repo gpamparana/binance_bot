@@ -40,7 +40,7 @@ uv run pytest tests/strategy/test_grid.py::test_build_ladders -v
 uv run pytest tests/ --cov=src/naut_hedgegrid --cov-report=html
 
 # Run backtest
-uv run python -m naut_hedgegrid.runners.run_backtest \
+uv run python -m naut_hedgegrid backtest \
     --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
     --strategy-config configs/strategies/hedge_grid_v1.yaml
 ```
@@ -289,17 +289,19 @@ uv run pytest tests/strategy/ -k "grid"
 - ✅ 248 core component tests passing
 - ⚠️ 27 strategy smoke tests have BarType parsing errors (known Nautilus 1.220.0 issue, non-critical)
 
-## Known Issues
+## Recent Fixes (2025-10-14)
 
-### BarType String Parsing (Nautilus 1.220.0)
+### BarType Parsing - FIXED
+**Issue**: BarType string parsing failed in HedgeGridV1 strategy.
+**Solution**: Strategy now constructs BarType programmatically in `on_start()` method instead of using string parsing.
 
-BarType.from_str() fails with format "BTCUSDT-PERP.BINANCE-1-MINUTE-LAST":
-```python
-# Error: invalid token 'BTCUSDT' at position 0
-bar_type = BarType.from_str("BTCUSDT-PERP.BINANCE-1-MINUTE-LAST")
-```
+### TradingNode API - UPDATED
+**Change**: Updated from deprecated `node.start()` to `node.run()` for live/paper trading.
+**Impact**: All runners now use correct TradingNode lifecycle methods.
 
-**Workaround**: Create BarType programmatically instead of parsing strings, or investigate correct format for current Nautilus version.
+### ImportableStrategyConfig - COMPLETE
+**Status**: HedgeGridV1 now fully integrates with Nautilus ImportableStrategyConfig pattern.
+**Benefit**: Proper strategy loading and configuration management.
 
 ## Code Style Conventions
 
@@ -422,7 +424,7 @@ data/catalog/
 configs/backtest/btcusdt_mark_trades_funding.yaml
 
 # 3. Run backtest
-uv run python -m naut_hedgegrid.runners.run_backtest
+uv run python -m naut_hedgegrid backtest
 
 # 4. View results
 artifacts/backtests/20241014_120000/

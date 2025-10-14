@@ -5,7 +5,9 @@ live exchange orders, minimizing unnecessary order operations through
 intelligent matching and tolerance-based comparisons.
 """
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field as dc_field
+from datetime import datetime
 from typing import Literal
 
 from naut_hedgegrid.domain.types import (
@@ -18,6 +20,8 @@ from naut_hedgegrid.domain.types import (
     parse_client_order_id,
 )
 from naut_hedgegrid.exchange.precision import PrecisionGuard
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -337,3 +341,194 @@ class OrderDiff:
             qty=new_rung.qty,
             metadata={"tag": new_rung.tag} if new_rung.tag else {},
         )
+
+
+@dataclass(frozen=True)
+class RetryAttempt:
+    """
+    Record of a single post-only retry attempt.
+
+    Tracks each retry attempt for debugging and monitoring purposes.
+    """
+
+    attempt_number: int
+    original_price: float
+    adjusted_price: float
+    reason: str
+    timestamp_ms: int
+
+
+class PostOnlyRetryHandler:
+    """
+    Handles post-only order retry logic with bounded attempts.
+
+    When a post-only order is rejected because it would cross the spread
+    (execute as taker), this handler:
+    1. Detects if rejection is retry-able
+    2. Adjusts price by N ticks AWAY from spread
+    3. Tracks retry attempts
+    4. Enforces maximum retry limit
+
+    Price Adjustment Logic:
+    - LONG (buy) orders: Decrease price by N ticks (move down, away from ask)
+    - SHORT (sell) orders: Increase price by N ticks (move up, away from bid)
+    - This makes the order more passive and increases chance of being maker
+    """
+
+    def __init__(
+        self,
+        precision_guard: PrecisionGuard,
+        max_attempts: int = 3,
+        enabled: bool = True,
+    ) -> None:
+        """
+        Initialize retry handler.
+
+        Args:
+            precision_guard: Precision guard for price clamping
+            max_attempts: Maximum number of retry attempts (default 3)
+            enabled: Whether retry logic is enabled (default True)
+        """
+        if max_attempts < 0:
+            msg = f"max_attempts must be non-negative, got {max_attempts}"
+            raise ValueError(msg)
+
+        self._precision_guard = precision_guard
+        self._max_attempts = max_attempts
+        self._enabled = enabled
+        self._retry_history: dict[str, list[RetryAttempt]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        """Check if retry logic is enabled."""
+        return self._enabled and self._max_attempts > 0
+
+    def should_retry(self, rejection_reason: str) -> bool:
+        """
+        Check if rejection is retry-able (post-only would trade).
+
+        Detects common rejection messages indicating the order would
+        execute immediately as a taker order instead of maker.
+
+        Args:
+            rejection_reason: Rejection reason from exchange
+
+        Returns:
+            True if rejection indicates post-only crossing spread
+        """
+        if not self._enabled:
+            return False
+
+        reason_lower = rejection_reason.lower()
+
+        # Common post-only rejection patterns from various exchanges
+        post_only_patterns = [
+            "post-only",
+            "post only",
+            "would be filled immediately",
+            "would immediately match",
+            "would execute as taker",
+            "would take liquidity",
+            "would cross",
+        ]
+
+        return any(pattern in reason_lower for pattern in post_only_patterns)
+
+    def adjust_price_for_retry(
+        self,
+        original_price: float,
+        side: Side,
+        attempt: int,
+    ) -> float:
+        """
+        Adjust price by N ticks away from spread for retry.
+
+        Makes the order more passive to avoid crossing spread.
+
+        Args:
+            original_price: Original order price that was rejected
+            side: Order side (LONG for buy, SHORT for sell)
+            attempt: Retry attempt number (1, 2, 3, ...)
+
+        Returns:
+            Adjusted price clamped to tick boundaries
+
+        Logic:
+            - LONG (buy): price -= (tick_size × attempt)
+            - SHORT (sell): price += (tick_size × attempt)
+        """
+        tick_size = self._precision_guard.precision.price_tick
+
+        # Calculate adjustment (negative for LONG, positive for SHORT)
+        adjustment = tick_size * attempt
+
+        if side == Side.LONG:
+            # Buy orders: move DOWN (away from ask)
+            adjusted = original_price - adjustment
+        else:
+            # Sell orders: move UP (away from bid)
+            adjusted = original_price + adjustment
+
+        # Clamp to valid tick boundary
+        return self._precision_guard.clamp_price(adjusted)
+
+    def record_attempt(
+        self,
+        client_order_id: str,
+        attempt: int,
+        original_price: float,
+        adjusted_price: float,
+        reason: str,
+    ) -> None:
+        """
+        Record retry attempt for logging and debugging.
+
+        Args:
+            client_order_id: Order client ID
+            attempt: Attempt number
+            original_price: Original price before adjustment
+            adjusted_price: Price after adjustment
+            reason: Rejection reason
+        """
+        from datetime import UTC
+
+        timestamp_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+
+        retry_attempt = RetryAttempt(
+            attempt_number=attempt,
+            original_price=original_price,
+            adjusted_price=adjusted_price,
+            reason=reason,
+            timestamp_ms=timestamp_ms,
+        )
+
+        if client_order_id not in self._retry_history:
+            self._retry_history[client_order_id] = []
+
+        self._retry_history[client_order_id].append(retry_attempt)
+
+        logger.info(
+            f"Retry attempt {attempt} for {client_order_id}: "
+            f"{original_price} -> {adjusted_price} (reason: {reason})"
+        )
+
+    def get_retry_history(self, client_order_id: str) -> list[RetryAttempt]:
+        """
+        Get all retry attempts for a given order.
+
+        Args:
+            client_order_id: Order client ID
+
+        Returns:
+            List of RetryAttempt records (empty if none)
+        """
+        return self._retry_history.get(client_order_id, [])
+
+    def clear_history(self, client_order_id: str) -> None:
+        """
+        Clear retry history for an order (after success or abandonment).
+
+        Args:
+            client_order_id: Order client ID
+        """
+        self._retry_history.pop(client_order_id, None)
