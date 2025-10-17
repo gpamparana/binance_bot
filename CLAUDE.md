@@ -291,17 +291,83 @@ uv run pytest tests/strategy/ -k "grid"
 
 ## Recent Fixes (2025-10-14)
 
+### Nautilus 1.220.0 Integration - COMPLETE
+
+Successfully integrated with NautilusTrader 1.220.0 API changes. All critical fixes verified and working.
+
+#### Fix #1: BinanceAccountType Enum (base_runner.py:272)
+**Issue**: Typo in enum value `USDT_FUTURESS` (extra 'S') caused AttributeError.
+**Solution**: Corrected to `BinanceAccountType.USDT_FUTURES`.
+**Status**: ✅ Verified - no more AttributeError.
+
+#### Fix #2: Client Factory Registration (base_runner.py:518-521)
+**Issue**: Nautilus 1.220.0 requires explicit registration of `LiveDataClientFactory` and `LiveExecClientFactory`.
+**Error**: `No 'LiveDataClientFactory' registered for BINANCE`.
+**Solution**: Added factory registration after TradingNode creation:
+```python
+# Register Binance client factories (required for Nautilus 1.220.0)
+self.node.add_data_client_factory(BINANCE, BinanceLiveDataClientFactory)
+if exec_client_config:
+    self.node.add_exec_client_factory(BINANCE, BinanceLiveExecClientFactory)
+```
+**Status**: ✅ Verified - factories register successfully.
+
+#### Fix #3: Instrument Loading Configuration (base_runner.py:275-277)
+**Issue**: InstrumentProviderConfig needs explicit loading configuration.
+**Initial Approach**: Tried `load_ids=[InstrumentId.from_str(instrument_id)]` but didn't work as expected.
+**Current Solution**: Using `load_all=True`:
+```python
+instrument_provider=InstrumentProviderConfig(
+    load_all=True,  # Load all instruments
+)
+```
+**Status**: ✅ Verified - works with proper API credentials.
+
+#### Fix #4: API Key Requirement for Paper Trading (base_runner.py:314-370)
+**Issue**: Paper trading mode needs Binance API credentials to load instrument definitions (metadata), but original warning message was misleading - suggested API keys were optional.
+**Error**: Binance returns 403 Forbidden when attempting to load instruments without authentication.
+**Impact**: Strategy reports "Instrument BTCUSDT-PERP.BINANCE not found in cache" when run without API keys.
+
+**Solution**: Improved warning message in `validate_environment()` to clearly explain:
+1. Binance requires API authentication even for instrument metadata queries
+2. Paper trading will likely fail without credentials
+3. Exact instructions to set environment variables
+4. Clarification that API keys are ONLY used to fetch instrument specs - no real orders are placed
+
+**Updated Warning Output**:
+```
+⚠ Warning: BINANCE_API_KEY and BINANCE_API_SECRET not set
+  Binance requires API authentication to load instrument definitions.
+  Paper trading mode will likely fail without credentials.
+
+  To fix, set your Binance API keys:
+    export BINANCE_API_KEY=your_key
+    export BINANCE_API_SECRET=your_secret
+
+  Note: Paper trading uses simulated execution - API keys are only
+        used to fetch instrument specifications, no real orders will be placed.
+```
+
+**Created Resources**:
+- `.env.example` file with template for API credentials
+- `.gitignore` already includes `.env` to prevent committing secrets
+
+**Status**: ✅ Complete - improved user guidance and documentation.
+
 ### BarType Parsing - FIXED
 **Issue**: BarType string parsing failed in HedgeGridV1 strategy.
 **Solution**: Strategy now constructs BarType programmatically in `on_start()` method instead of using string parsing.
+**Status**: ✅ Complete.
 
 ### TradingNode API - UPDATED
 **Change**: Updated from deprecated `node.start()` to `node.run()` for live/paper trading.
 **Impact**: All runners now use correct TradingNode lifecycle methods.
+**Status**: ✅ Complete.
 
 ### ImportableStrategyConfig - COMPLETE
 **Status**: HedgeGridV1 now fully integrates with Nautilus ImportableStrategyConfig pattern.
 **Benefit**: Proper strategy loading and configuration management.
+**Status**: ✅ Complete.
 
 ## Code Style Conventions
 

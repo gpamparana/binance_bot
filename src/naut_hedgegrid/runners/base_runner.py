@@ -25,6 +25,8 @@ from nautilus_trader.adapters.binance import (
     BinanceAccountType,
     BinanceDataClientConfig,
     BinanceExecClientConfig,
+    BinanceLiveDataClientFactory,
+    BinanceLiveExecClientFactory,
 )
 from nautilus_trader.config import InstrumentProviderConfig, TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
@@ -264,9 +266,6 @@ class BaseRunner(ABC):
         BinanceDataClientConfig
             Configured data client
         """
-        # Extract symbol from instrument_id (e.g., "BTCUSDT-PERP.BINANCE" -> "BTCUSDT")
-        symbol = instrument_id.split("-")[0]
-
         return BinanceDataClientConfig(
             api_key=api_key,
             api_secret=api_secret,
@@ -274,8 +273,7 @@ class BaseRunner(ABC):
             testnet=venue_cfg.api.testnet,
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
             instrument_provider=InstrumentProviderConfig(
-                load_all=False,  # Don't load all instruments
-                filters={"symbols": [symbol]},  # Only load this symbol
+                load_all=True,  # Load all instruments (temporary workaround)
             ),
         )
 
@@ -347,9 +345,27 @@ class BaseRunner(ABC):
                 "[yellow]⚠ Warning: BINANCE_API_KEY and BINANCE_API_SECRET not set[/yellow]"
             )
             self.console.print(
-                "[yellow]  Public market data only "
-                "(no account data or private endpoints)[/yellow]"
+                "[yellow]  Binance requires API authentication to load instrument definitions.[/yellow]"
             )
+            self.console.print(
+                "[yellow]  Paper trading mode will likely fail without credentials.[/yellow]"
+            )
+            self.console.print()
+            self.console.print("[yellow]  To fix, set your Binance API keys:[/yellow]")
+            self.console.print("[yellow]    export BINANCE_API_KEY=your_key[/yellow]")
+            self.console.print("[yellow]    export BINANCE_API_SECRET=your_secret[/yellow]")
+            self.console.print()
+            self.console.print(
+                "[yellow]  Note: Paper trading uses simulated execution - "
+                "API keys are only[/yellow]"
+            )
+            self.console.print(
+                "[yellow]        used to fetch instrument specifications, "
+                "no real orders will be placed.[/yellow]"
+            )
+        else:
+            self.console.print("[green]✓[/green] BINANCE_API_KEY found")
+            self.console.print("[green]✓[/green] BINANCE_API_SECRET found")
 
         return api_key, api_secret
 
@@ -515,6 +531,12 @@ class BaseRunner(ABC):
 
             # Create node
             self.node = TradingNode(config=node_config)
+
+            # Register Binance client factories (required for Nautilus 1.220.0)
+            self.node.add_data_client_factory(BINANCE, BinanceLiveDataClientFactory)
+            if exec_client_config:
+                self.node.add_exec_client_factory(BINANCE, BinanceLiveExecClientFactory)
+            self.console.print("[green]✓[/green] Registered Binance client factories")
 
             # Setup signal handlers
             self.setup_signal_handlers()
