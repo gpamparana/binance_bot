@@ -172,12 +172,9 @@ def backtest(
             instrument_id = hedge_grid_cfg.strategy.instrument_id
 
             # Create HedgeGridV1Config
-            # Bar type format: BTCUSDT-PERP.BINANCE-1-MINUTE-LAST
-            bar_type = f"{instrument_id}-1-MINUTE-LAST"
-
+            # Note: bar_type is constructed inside the strategy, not passed in config
             strat_cfg = HedgeGridV1Config(
                 instrument_id=instrument_id,
-                bar_type=bar_type,
                 hedge_grid_config_path=str(strat_config_path),
                 oms_type=OmsType.HEDGING,
             )

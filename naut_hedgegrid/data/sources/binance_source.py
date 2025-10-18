@@ -50,8 +50,8 @@ class BinanceDataSource(DataSource):
     def __init__(
         self,
         base_url: str = "https://fapi.binance.com",
-        rate_limit_delay: float = 1.0,  # Increased to 1s (1 req/sec) to avoid rate limits
-        request_limit: int = 1000,
+        rate_limit_delay: float = 0.5,  # 2 req/sec = 120/min (5% of 2400/min limit - very conservative)
+        request_limit: int = 500,  # Smaller batches = more requests but less data per request
         testnet: bool = False,
         max_retries: int = 5,
     ):
@@ -128,7 +128,7 @@ class BinanceDataSource(DataSource):
 
                     data = await response.json()
 
-                    # Base rate limiting (1s = 1 req/sec = 60 req/min, well under 2400/min limit)
+                    # Base rate limiting (0.5s = 2 req/sec = 120/min, 5% of 2400/min limit)
                     await asyncio.sleep(self.rate_limit_delay)
 
                     return data

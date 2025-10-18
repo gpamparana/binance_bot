@@ -77,7 +77,7 @@ def create_source(source_type: str, config: dict[str, Any]) -> DataSource:
     if source_type == "binance":
         return source_class(
             base_url=config.get("base_url", "https://fapi.binance.com"),
-            rate_limit_delay=config.get("rate_limit_delay", 0.2),
+            rate_limit_delay=config.get("rate_limit_delay", 0.5),  # 2 req/sec default - conservative to avoid 429s
             request_limit=config.get("request_limit", 1000),
             testnet=config.get("testnet", False),
         )

@@ -55,10 +55,10 @@ execution:
 
   # Fill simulation
   fill_model:
-    type: realistic  # naive, realistic, or probabilistic
-    maker_fill_prob: 0.90  # Probability maker orders fill
+    type: naive  # naive, realistic, or probabilistic
+    maker_fill_prob: 1.0  # Probability maker orders fill
     aggressive_fill_prob: 1.0
-    slippage_bps: 1.0  # Expected slippage in bps
+    slippage_bps: 0.0  # Expected slippage in bps
 
   # Fees
   fees:
