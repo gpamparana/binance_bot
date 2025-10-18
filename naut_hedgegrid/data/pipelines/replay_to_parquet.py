@@ -28,6 +28,7 @@ from naut_hedgegrid.data.pipelines.normalizer import (
 )
 from naut_hedgegrid.data.schemas import convert_dataframe_to_nautilus
 from naut_hedgegrid.data.sources.base import DataSource
+from naut_hedgegrid.data.sources.binance_source import BinanceDataSource
 from naut_hedgegrid.data.sources.csv_source import CSVDataSource
 from naut_hedgegrid.data.sources.tardis_source import TardisDataSource
 from naut_hedgegrid.data.sources.websocket_source import WebSocketDataSource
@@ -43,7 +44,7 @@ def create_source(source_type: str, config: dict[str, Any]) -> DataSource:
     Parameters
     ----------
     source_type : str
-        Type of data source ("tardis", "csv", "websocket")
+        Type of data source ("binance", "tardis", "csv", "websocket")
     config : dict
         Configuration for the data source
 
@@ -59,6 +60,7 @@ def create_source(source_type: str, config: dict[str, Any]) -> DataSource:
 
     """
     sources = {
+        "binance": BinanceDataSource,
         "tardis": TardisDataSource,
         "csv": CSVDataSource,
         "websocket": WebSocketDataSource,
@@ -72,6 +74,13 @@ def create_source(source_type: str, config: dict[str, Any]) -> DataSource:
     source_class = sources[source_type]
 
     # Create instance based on source type
+    if source_type == "binance":
+        return source_class(
+            base_url=config.get("base_url", "https://fapi.binance.com"),
+            rate_limit_delay=config.get("rate_limit_delay", 0.2),
+            request_limit=config.get("request_limit", 1000),
+            testnet=config.get("testnet", False),
+        )
     if source_type == "tardis":
         return source_class(
             api_key=config.get("api_key"),
@@ -321,7 +330,7 @@ async def run_pipeline(
     Parameters
     ----------
     source_type : str
-        Data source type ("tardis", "csv", "websocket")
+        Data source type ("binance", "tardis", "csv", "websocket")
     symbol : str
         Trading symbol (e.g., "BTCUSDT")
     start_date : str
@@ -411,7 +420,7 @@ app = typer.Typer(
 @app.command()
 def main(
     source: str = typer.Option(
-        "tardis", "--source", "-s", help="Data source: tardis, csv, websocket"
+        "binance", "--source", "-s", help="Data source: binance, tardis, csv, websocket"
     ),
     symbol: str = typer.Option("BTCUSDT", "--symbol", help="Trading symbol"),
     start: str = typer.Option(..., "--start", help="Start date (YYYY-MM-DD)"),
