@@ -801,7 +801,7 @@ class HedgeGridV1(Strategy):
             price=Price(intent.price, precision=instrument.price_precision),
             time_in_force=TimeInForce.GTC,
             post_only=True,  # Maker-only orders
-            client_order_id=self.clock.generate_client_order_id(intent.client_order_id),
+            client_order_id=ClientOrderId(intent.client_order_id),
         )
 
         return order
@@ -846,7 +846,7 @@ class HedgeGridV1(Strategy):
             price=Price(tp_price, precision=self._instrument.price_precision),
             time_in_force=TimeInForce.GTC,
             reduce_only=True,
-            client_order_id=self.clock.generate_client_order_id(client_order_id_str),
+            client_order_id=ClientOrderId(client_order_id_str),
         )
 
         return order
@@ -892,7 +892,7 @@ class HedgeGridV1(Strategy):
             trigger_type=TriggerType.LAST_TRADE,
             time_in_force=TimeInForce.GTC,
             reduce_only=True,
-            client_order_id=self.clock.generate_client_order_id(client_order_id_str),
+            client_order_id=ClientOrderId(client_order_id_str),
         )
 
         return order

@@ -333,34 +333,28 @@ class BacktestRunner:
         """
         total_items = 0
 
-        if "bars" in data:
-            for bar in data["bars"]:
-                engine.add_data(bar)
+        if "bars" in data and data["bars"]:
+            engine.add_data(data["bars"])
             total_items += len(data["bars"])
 
-        if "trade_ticks" in data:
-            for tick in data["trade_ticks"]:
-                engine.add_data(tick)
+        if "trade_ticks" in data and data["trade_ticks"]:
+            engine.add_data(data["trade_ticks"])
             total_items += len(data["trade_ticks"])
 
-        if "quote_ticks" in data:
-            for quote in data["quote_ticks"]:
-                engine.add_data(quote)
+        if "quote_ticks" in data and data["quote_ticks"]:
+            engine.add_data(data["quote_ticks"])
             total_items += len(data["quote_ticks"])
 
-        if "order_book_deltas" in data:
-            for delta in data["order_book_deltas"]:
-                engine.add_data(delta)
+        if "order_book_deltas" in data and data["order_book_deltas"]:
+            engine.add_data(data["order_book_deltas"])
             total_items += len(data["order_book_deltas"])
 
-        if "fundingratesing" in data:
-            for rate in data["fundingratesing"]:
-                engine.add_data(rate)
+        if "fundingratesing" in data and data["fundingratesing"]:
+            engine.add_data(data["fundingratesing"])
             total_items += len(data["fundingratesing"])
 
-        if "markprices" in data:
-            for price in data["markprices"]:
-                engine.add_data(price)
+        if "markprices" in data and data["markprices"]:
+            engine.add_data(data["markprices"])
             total_items += len(data["markprices"])
 
         self.console.print(f"[green]✓[/green] Added {total_items:,} data items to engine")
@@ -470,17 +464,24 @@ class BacktestRunner:
         venue = Venue(venue_name)
         account = portfolio.account(venue)
 
+        # Get currency from starting balances (use first balance currency)
+        currency = None
+        if self.config.venues and self.config.venues[0].starting_balances:
+            currency = Currency.from_str(self.config.venues[0].starting_balances[0].currency)
+
         # Build results dict
         results = {
             "run_id": self.run_id,
             "config": self.config.model_dump(mode="python"),
             "account": {
-                "balance_total": float(account.balance_total().as_double())
-                if account
+                "balance_total": float(account.balance_total(currency).as_double())
+                if account and currency
                 else 0.0,
-                "balance_free": float(account.balance_free().as_double()) if account else 0.0,
-                "balance_locked": float(account.balance_locked().as_double())
-                if account
+                "balance_free": float(account.balance_free(currency).as_double())
+                if account and currency
+                else 0.0,
+                "balance_locked": float(account.balance_locked(currency).as_double())
+                if account and currency
                 else 0.0,
             },
             "orders": [],

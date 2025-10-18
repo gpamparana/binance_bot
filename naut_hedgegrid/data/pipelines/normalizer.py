@@ -95,43 +95,50 @@ def normalize_trades(df: pd.DataFrame, source_type: str = "unknown") -> pd.DataF
 
 def normalize_mark_prices(df: pd.DataFrame, source_type: str = "unknown") -> pd.DataFrame:
     """
-    Normalize mark price data to MarkPriceSchema format.
+    Normalize mark price OHLCV data for bars.
 
     Handles:
     - Timestamp conversion to UTC
-    - Price validation (must be positive)
+    - OHLCV price validation (must be positive)
     - Sorting by timestamp
     - Duplicate removal
 
     Parameters
     ----------
     df : pd.DataFrame
-        Raw mark price data
+        Raw mark price OHLCV data (timestamp, open, high, low, close, volume)
     source_type : str, default "unknown"
         Source type for logging
 
     Returns
     -------
     pd.DataFrame
-        Normalized mark price data
+        Normalized mark price OHLCV data
 
     """
     if df.empty:
         logger.warning(f"Empty DataFrame for {source_type} mark prices")
         return df
 
-    logger.info(f"Normalizing {len(df):,} mark prices from {source_type}")
+    logger.info(f"Normalizing {len(df):,} mark price bars from {source_type}")
 
     df = df.copy()
 
     # Normalize timestamp
     df["timestamp"] = _normalize_timestamp(df["timestamp"])
 
-    # Validate mark price
-    if (df["mark_price"] <= 0).any():
-        invalid_count = (df["mark_price"] <= 0).sum()
-        logger.warning(f"Found {invalid_count} invalid mark prices, removing")
-        df = df[df["mark_price"] > 0]
+    # Validate OHLCV prices (all must be positive)
+    for col in ["open", "high", "low", "close"]:
+        if col in df.columns and (df[col] <= 0).any():
+            invalid_count = (df[col] <= 0).sum()
+            logger.warning(f"Found {invalid_count} invalid {col} prices, removing")
+            df = df[df[col] > 0]
+
+    # Validate volume is non-negative
+    if "volume" in df.columns and (df["volume"] < 0).any():
+        invalid_count = (df["volume"] < 0).sum()
+        logger.warning(f"Found {invalid_count} negative volumes, removing")
+        df = df[df["volume"] >= 0]
 
     # Sort by timestamp
     df = df.sort_values("timestamp").reset_index(drop=True)
@@ -140,12 +147,9 @@ def normalize_mark_prices(df: pd.DataFrame, source_type: str = "unknown") -> pd.
     initial_len = len(df)
     df = df.drop_duplicates(subset=["timestamp"], keep="last")
     if len(df) < initial_len:
-        logger.info(f"Removed {initial_len - len(df)} duplicate mark prices")
+        logger.info(f"Removed {initial_len - len(df)} duplicate mark price bars")
 
-    # Validate schema
-    validate_dataframe_schema(df, "mark")
-
-    logger.info(f"Normalized {len(df):,} mark prices successfully")
+    logger.info(f"Normalized {len(df):,} mark price bars successfully")
     return df
 
 

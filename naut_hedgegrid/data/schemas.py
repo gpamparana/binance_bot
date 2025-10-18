@@ -10,8 +10,8 @@ from typing import Any
 
 import pandas as pd
 from nautilus_trader.core.datetime import dt_to_unix_nanos
-from nautilus_trader.model.data import TradeTick
-from nautilus_trader.model.enums import AggressorSide
+from nautilus_trader.model.data import Bar, BarType, TradeTick
+from nautilus_trader.model.enums import AggressorSide, BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 from pydantic import BaseModel, Field, field_validator
@@ -341,3 +341,47 @@ def convert_dataframe_to_nautilus(
         results.append(obj)
 
     return results
+
+
+def mark_prices_to_bars(
+    df: pd.DataFrame, bar_type: BarType
+) -> list[Bar]:
+    """
+    Convert mark price OHLCV data to Nautilus Bar objects.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns: timestamp, open, high, low, close, volume
+    bar_type : BarType
+        Nautilus BarType for the bars
+
+    Returns
+    -------
+    list[Bar]
+        List of Nautilus Bar objects
+
+    """
+    required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns for bars: {missing}")
+
+    bars = []
+    for row in df.itertuples(index=False):
+        ts_event = dt_to_unix_nanos(row.timestamp)
+        ts_init = ts_event
+
+        bar = Bar(
+            bar_type=bar_type,
+            open=Price.from_str(f"{row.open:.2f}"),
+            high=Price.from_str(f"{row.high:.2f}"),
+            low=Price.from_str(f"{row.low:.2f}"),
+            close=Price.from_str(f"{row.close:.2f}"),
+            volume=Quantity.from_str(f"{row.volume:.3f}"),
+            ts_event=ts_event,
+            ts_init=ts_init,
+        )
+        bars.append(bar)
+
+    return bars

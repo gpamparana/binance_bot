@@ -323,15 +323,20 @@ class BinanceDataSource(DataSource):
                 break
 
         if not all_klines:
-            return pd.DataFrame(columns=["timestamp", "mark_price"])
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-        # Convert to DataFrame (use close price of candle)
+        # Convert to DataFrame with full OHLCV data
+        # Kline format: [Open time, Open, High, Low, Close, Volume, Close time, ...]
         df = pd.DataFrame(
             {
                 "timestamp": pd.to_datetime(
                     [k[0] for k in all_klines], unit="ms", utc=True
                 ),  # Open time
-                "mark_price": [float(k[4]) for k in all_klines],  # Close price
+                "open": [float(k[1]) for k in all_klines],
+                "high": [float(k[2]) for k in all_klines],
+                "low": [float(k[3]) for k in all_klines],
+                "close": [float(k[4]) for k in all_klines],
+                "volume": [float(k[5]) for k in all_klines],
             }
         )
 

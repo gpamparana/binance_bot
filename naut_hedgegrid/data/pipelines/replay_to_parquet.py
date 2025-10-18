@@ -14,6 +14,8 @@ from typing import Any
 
 import pandas as pd
 import typer
+from nautilus_trader.model.data import BarType
+from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
@@ -26,7 +28,7 @@ from naut_hedgegrid.data.pipelines.normalizer import (
     normalize_mark_prices,
     normalize_trades,
 )
-from naut_hedgegrid.data.schemas import convert_dataframe_to_nautilus
+from naut_hedgegrid.data.schemas import convert_dataframe_to_nautilus, mark_prices_to_bars
 from naut_hedgegrid.data.sources.base import DataSource
 from naut_hedgegrid.data.sources.binance_source import BinanceDataSource
 from naut_hedgegrid.data.sources.csv_source import CSVDataSource
@@ -287,15 +289,18 @@ def write_to_catalog(
         catalog.write_data(trade_ticks)
         console.print(f"[green]✓[/green] Wrote {len(trade_ticks):,} trade ticks")
 
-    # Write mark prices (as generic data - Nautilus handles custom data types)
+    # Write mark prices as 1-minute bars
     if "mark" in data and not data["mark"].empty:
-        # For now, we'll store mark prices as a custom parquet file
-        # since Nautilus doesn't have a built-in MarkPrice type
-        mark_data = data["mark"].copy()
-        mark_file = Path(output_path) / f"{instrument_id.value}" / "mark_price.parquet"
-        mark_file.parent.mkdir(parents=True, exist_ok=True)
-        mark_data.to_parquet(mark_file, index=False)
-        console.print(f"[green]✓[/green] Wrote {len(mark_data):,} mark prices")
+        # Create BarType for 1-minute mark price bars
+        # Format: BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL
+        bar_type = BarType.from_str(
+            f"{instrument_id.value}-1-MINUTE-LAST-EXTERNAL"
+        )
+
+        # Convert mark price OHLCV data to Nautilus bars
+        bars = mark_prices_to_bars(data["mark"], bar_type)
+        catalog.write_data(bars)
+        console.print(f"[green]✓[/green] Wrote {len(bars):,} mark price bars (1-minute)")
 
     # Write funding rates (as custom parquet file)
     if "funding" in data and not data["funding"].empty:

@@ -18,11 +18,7 @@ data:
   instruments:
     - instrument_id: BTCUSDT-PERP.BINANCE
       data_types:
-        - type: OrderBookDelta
-          depth: 10
-        - type: TradeTick
-        - type: QuoteTick
-        - type: MarkPrice
+        - type: Bar  # 1-minute mark price bars (fast download)
         - type: FundingRate
 
   # Data sources

@@ -1,0 +1,112 @@
+{
+  "backtest": {
+    "name": "btcusdt_mark_trades_funding",
+    "description": "BTC perpetual backtest with mark price, trades, and funding rates"
+  },
+  "time_range": {
+    "start_time": "2024-01-01 00:00:00+00:00",
+    "end_time": "2024-12-31 23:59:59+00:00",
+    "timezone": "UTC"
+  },
+  "data": {
+    "catalog_path": "./data/catalog",
+    "instruments": [
+      {
+        "instrument_id": "BTCUSDT-PERP.BINANCE",
+        "data_types": [
+          {
+            "type": "OrderBookDelta",
+            "depth": 10
+          },
+          {
+            "type": "TradeTick",
+            "depth": null
+          },
+          {
+            "type": "QuoteTick",
+            "depth": null
+          },
+          {
+            "type": "MarkPrice",
+            "depth": null
+          },
+          {
+            "type": "FundingRate",
+            "depth": null
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "type": "parquet",
+        "path": "./data/binance/futures/btcusdt/",
+        "glob_pattern": "*.parquet"
+      }
+    ]
+  },
+  "venues": [
+    {
+      "config_path": "./configs/venues/binance_futures.yaml",
+      "starting_balances": [
+        {
+          "currency": "USDT",
+          "total": 10000.0,
+          "locked": 0.0
+        }
+      ]
+    }
+  ],
+  "strategies": [
+    {
+      "config_path": "./configs/strategies/hedge_grid_v1.yaml",
+      "enabled": true
+    }
+  ],
+  "execution": {
+    "latency": {
+      "order_submit_ms": 50,
+      "order_cancel_ms": 30,
+      "fill_mean_ms": 100,
+      "fill_std_ms": 20
+    },
+    "fill_model": {
+      "type": "naive",
+      "maker_fill_prob": 1.0,
+      "aggressive_fill_prob": 1.0,
+      "slippage_bps": 0.0
+    },
+    "fees": {
+      "maker_bps": 2.0,
+      "taker_bps": 5.0,
+      "funding_apply": true
+    }
+  },
+  "risk": {
+    "max_drawdown_pct": 20.0,
+    "max_daily_loss_pct": 5.0,
+    "stop_on_liquidation": true
+  },
+  "output": {
+    "report_dir": "./reports",
+    "save_trades": true,
+    "save_positions": true,
+    "save_account_state": true,
+    "log_level": "INFO"
+  },
+  "metrics": {
+    "calculate": [
+      "sharpe_ratio",
+      "sortino_ratio",
+      "max_drawdown",
+      "calmar_ratio",
+      "win_rate",
+      "profit_factor",
+      "avg_trade_pnl",
+      "total_trades",
+      "funding_pnl"
+    ],
+    "risk_free_rate": 0.04,
+    "periods_per_year": 365
+  }
+}
