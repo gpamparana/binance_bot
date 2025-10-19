@@ -8,12 +8,21 @@ venue:
   account_type: PERPETUAL_LINEAR
 
 # API Configuration - TESTNET
+#
+# How this works:
+# - testnet: true → Nautilus auto-detects HTTP URL as https://testnet.binancefuture.com
+# - base_url: null → Use Nautilus auto-detection (recommended)
+# - ws_url: wss://fstream.binancefuture.com → Override Nautilus bug
+#
+# NOTE: Nautilus 1.220.0 has a bug where testnet WebSocket URL is set to
+#       wss://stream.binancefuture.com (missing 'f' prefix), which causes
+#       403 Forbidden errors. We override it here with the correct URL.
 api:
   api_key: ${BINANCE_TESTNET_API_KEY}
   api_secret: ${BINANCE_TESTNET_API_SECRET}
-  testnet: true  # CRITICAL: Must be true for testnet
-  base_url: https://testnet.binancefuture.com  # Testnet URL
-  ws_url: wss://fstream.binancefuture.com  # Testnet WebSocket URL
+  testnet: true
+  base_url: null  # Auto-detected by Nautilus when testnet=true
+  ws_url: wss://fstream.binancefuture.com  # Fix for Nautilus bug (should be fstream, not stream)
 
 # Trading Configuration
 trading:
