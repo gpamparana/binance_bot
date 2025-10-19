@@ -715,7 +715,7 @@ class HedgeGridV1(Strategy):
 
         """
         # Find order in cache
-        order = self.cache.order(intent.client_order_id)
+        order = self.cache.order(ClientOrderId(intent.client_order_id))
         if order is None:
             self.log.warning(f"Cannot cancel: order {intent.client_order_id} not in cache")
             return
@@ -889,7 +889,7 @@ class HedgeGridV1(Strategy):
             order_side=order_side,
             quantity=Quantity(quantity, precision=self._instrument.size_precision),
             trigger_price=Price(sl_price, precision=self._instrument.price_precision),
-            trigger_type=TriggerType.LAST_TRADE,
+            trigger_type=TriggerType.LAST_PRICE,
             time_in_force=TimeInForce.GTC,
             reduce_only=True,
             client_order_id=ClientOrderId(client_order_id_str),

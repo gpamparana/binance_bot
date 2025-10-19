@@ -529,3 +529,4 @@ order = self.order_factory.limit(...)
 position_id = PositionId(f"{self.instrument_id}-LONG")
 self.submit_order(order, position_id=position_id)
 ```
+- Dont be a yes man, be critical in your thinking and remember to leverage the created subagents when needed.

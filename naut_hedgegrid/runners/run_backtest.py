@@ -262,11 +262,33 @@ class BacktestRunner:
             If venue configuration is invalid
 
         """
-        # Create engine config with logging settings
+        # Create log directory for this run
+        output_dir = Path(self.config.output.report_dir) / self.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine log file format for Nautilus (expects "JSON" or None)
+        log_format = None
+        if self.config.output.log_file_format == "json":
+            log_format = "JSON"
+
+        # Create engine config with logging settings (console + optional file)
         logging_config = LoggingConfig(
             bypass_logging=False,
             log_level=self.config.output.log_level,
+            log_level_file=self.config.output.log_level_file,
+            log_directory=str(output_dir) if self.config.output.log_level_file else None,
+            log_file_name="backtest.log" if self.config.output.log_level_file else None,
+            log_file_format=log_format,
+            log_file_max_size=50 * 1024 * 1024,  # 50 MB before rotation
+            log_file_max_backup_count=5,  # Keep 5 backup files
         )
+
+        if self.config.output.log_level_file:
+            log_file = output_dir / "backtest.log"
+            self.console.print(f"[green]✓[/green] Logs will be saved to: {log_file}")
+        else:
+            self.console.print("[yellow]⚠[/yellow] File logging disabled")
+
         engine_config = BacktestEngineConfig(
             logging=logging_config,
         )
@@ -421,6 +443,22 @@ class BacktestRunner:
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
+        # Important: Properly dispose of the engine to ensure clean shutdown
+        # This ensures all pending log messages are flushed before continuing
+        import time
+        import sys
+
+        # Dispose the engine to trigger proper cleanup
+        engine.dispose()
+
+        # Flush Python's stdout/stderr buffers
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # Give any remaining async operations time to complete
+        # NautilusTrader uses internal async logging that may still be processing
+        time.sleep(1.0)  # Increased delay to ensure all logs are flushed
+
         self.console.print(f"[green]✓[/green] Backtest completed in {duration:.2f}s\n")
 
         return engine, data
@@ -491,8 +529,11 @@ class BacktestRunner:
 
         # Extract fills from orders
         try:
+            from nautilus_trader.model.enums import OrderStatus
+
             for order in engine.cache.orders():
-                if order.is_filled or order.filled_qty.as_double() > 0:
+                # Check if order has been filled (fully or partially)
+                if order.status == OrderStatus.FILLED or order.filled_qty.as_double() > 0:
                     order_dict = {
                         "client_order_id": str(order.client_order_id),
                         "venue_order_id": str(order.venue_order_id) if order.venue_order_id else None,
@@ -509,6 +550,18 @@ class BacktestRunner:
         # Extract positions
         try:
             for position in engine.cache.positions():
+                # For closed positions, unrealized PnL is 0
+                # For open positions, use the last known price
+                unrealized = 0.0
+                if position.is_open:
+                    # Get last price from position's last event or use closing price
+                    last_price = position.avg_px_close if position.avg_px_close else position.avg_px_open
+                    try:
+                        from nautilus_trader.model.objects import Price
+                        unrealized = float(position.unrealized_pnl(Price(last_price, precision=2)).as_double())
+                    except Exception:
+                        unrealized = 0.0
+
                 position_dict = {
                     "position_id": str(position.id),
                     "instrument_id": str(position.instrument_id),
@@ -516,7 +569,7 @@ class BacktestRunner:
                     "quantity": float(position.quantity.as_double()),
                     "entry_price": float(position.avg_px_open),
                     "realized_pnl": float(position.realized_pnl.as_double()),
-                    "unrealized_pnl": float(position.unrealized_pnl().as_double()),
+                    "unrealized_pnl": unrealized,
                 }
                 results["positions"].append(position_dict)
         except Exception as e:
@@ -796,7 +849,18 @@ def main(
         if run_id:
             runner.run_id = run_id
 
-        console.print(f"[cyan]Run ID: {runner.run_id}[/cyan]\n")
+        console.print(f"[cyan]Run ID: {runner.run_id}[/cyan]")
+
+        # Suggest log capture for long backtests
+        days = (bt_config.time_range.end_time - bt_config.time_range.start_time).days
+        if days > 7:
+            console.print(
+                f"\n[yellow]Note:[/yellow] This backtest covers {days} days. "
+                "Terminal logs may be truncated.\n"
+                "To save complete logs, restart with:\n"
+                f"  [cyan]uv run python -m naut_hedgegrid backtest 2>&1 | "
+                f"tee reports/{runner.run_id}/backtest.log[/cyan]\n"
+            )
 
         # Setup catalog
         catalog = runner.setup_catalog()

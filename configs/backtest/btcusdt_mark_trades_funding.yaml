@@ -6,8 +6,8 @@ backtest:
 
 # Time Range
 time_range:
-  start_time: "2024-01-01T00:00:00Z"
-  end_time: "2024-12-31T23:59:59Z"
+  start_time: "2025-09-01T00:00:00Z"
+  end_time: "2025-09-02T00:00:00Z"
   timezone: UTC
 
 # Data Configuration
@@ -74,7 +74,9 @@ output:
   save_trades: true
   save_positions: true
   save_account_state: true
-  log_level: INFO
+  log_level: INFO  # Console logging level (DEBUG, INFO, WARNING, ERROR)
+  log_level_file: INFO  # File logging level (set to null to disable file logging)
+  log_file_format: text  # Log file format: text or json
 
 # Performance Metrics
 metrics:

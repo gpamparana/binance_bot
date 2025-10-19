@@ -142,7 +142,13 @@ class OutputConfig(BaseModel):
     save_positions: bool = Field(default=True, description="Save position records")
     save_account_state: bool = Field(default=True, description="Save account state snapshots")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
-        default="INFO", description="Logging level"
+        default="INFO", description="Console logging level"
+    )
+    log_level_file: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = Field(
+        default="INFO", description="File logging level (None to disable file logging)"
+    )
+    log_file_format: Literal["text", "json"] | None = Field(
+        default="text", description="Log file format (text or json)"
     )
 
 
