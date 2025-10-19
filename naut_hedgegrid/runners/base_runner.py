@@ -738,6 +738,9 @@ class LiveRunner(BaseRunner):
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
             base_url_ws=venue_cfg.api.ws_url if venue_cfg.api.ws_url else None,
             use_reduce_only=False,  # CRITICAL: False for hedge mode
+            max_retries=3,  # Retry failed requests
+            retry_delay_initial_ms=500,  # Initial retry delay
+            retry_delay_max_ms=3000,  # Max retry delay
         )
 
     def get_runner_name(self) -> str:
