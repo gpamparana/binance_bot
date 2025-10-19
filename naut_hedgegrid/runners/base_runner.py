@@ -289,6 +289,7 @@ class BaseRunner(ABC):
         strategy_config: ImportableStrategyConfig,
         data_client_config: BinanceDataClientConfig,
         exec_client_config: BinanceExecClientConfig | None = None,
+        instrument_id: InstrumentId | None = None,
     ) -> TradingNodeConfig:
         """Create TradingNodeConfig for paper or live trading.
 
@@ -300,22 +301,36 @@ class BaseRunner(ABC):
             Data client configuration
         exec_client_config : BinanceExecClientConfig | None
             Execution client configuration (None for paper trading)
+        instrument_id : InstrumentId | None
+            Instrument ID for reconciliation filtering (to avoid non-ASCII symbols)
 
         Returns
         -------
         TradingNodeConfig
             Configured TradingNode
         """
+        from nautilus_trader.config import LiveExecEngineConfig
+
         trader_id = self.get_trader_id()
 
         # Add exec client if provided
         exec_clients = {BINANCE: exec_client_config} if exec_client_config else {}
+
+        # Configure exec engine to only reconcile our specific instrument
+        # This prevents crashes from testnet instruments with non-ASCII names
+        exec_engine_config = None
+        if instrument_id:
+            exec_engine_config = LiveExecEngineConfig(
+                reconciliation=True,
+                reconciliation_instrument_ids=[instrument_id],  # Only reconcile this instrument
+            )
 
         return TradingNodeConfig(
             trader_id=trader_id,
             data_clients={BINANCE: data_client_config},
             exec_clients=exec_clients,
             strategies=[strategy_config],
+            exec_engine=exec_engine_config,
         )
 
     def load_configs(
@@ -467,11 +482,13 @@ class BaseRunner(ABC):
                 api_secret=api_secret,
             )
 
-            # Create node config
+            # Create node config with instrument filtering
+            instrument_id_obj = InstrumentId.from_str(instrument_id)
             node_config = self.create_node_config(
                 strategy_config=strat_cfg,
                 data_client_config=data_client_config,
                 exec_client_config=exec_client_config,
+                instrument_id=instrument_id_obj,
             )
 
             # Display configuration summary
