@@ -70,6 +70,7 @@ class BaseRunner(ABC):
     @abstractmethod
     def create_exec_client_config(
         self,
+        instrument_id: str,
         venue_cfg: VenueConfig,
         api_key: str | None,
         api_secret: str | None,
@@ -460,6 +461,7 @@ class BaseRunner(ABC):
 
             # Create execution client config (subclass-specific)
             exec_client_config = self.create_exec_client_config(
+                instrument_id=instrument_id,
                 venue_cfg=venue_cfg,
                 api_key=api_key,
                 api_secret=api_secret,
@@ -607,6 +609,7 @@ class PaperRunner(BaseRunner):
 
     def create_exec_client_config(
         self,
+        instrument_id: str,  # noqa: ARG002
         venue_cfg: VenueConfig,  # noqa: ARG002
         api_key: str | None,  # noqa: ARG002
         api_secret: str | None,  # noqa: ARG002
@@ -617,6 +620,8 @@ class PaperRunner(BaseRunner):
 
         Parameters
         ----------
+        instrument_id : str
+            Instrument ID (unused for paper trading)
         venue_cfg : VenueConfig
             Venue configuration (unused for paper trading)
         api_key : str | None
@@ -707,6 +712,7 @@ class LiveRunner(BaseRunner):
 
     def create_exec_client_config(
         self,
+        instrument_id: str,
         venue_cfg: VenueConfig,
         api_key: str | None,
         api_secret: str | None,
@@ -718,6 +724,8 @@ class LiveRunner(BaseRunner):
 
         Parameters
         ----------
+        instrument_id : str
+            Instrument ID to trade
         venue_cfg : VenueConfig
             Venue configuration
         api_key : str | None
@@ -730,6 +738,10 @@ class LiveRunner(BaseRunner):
         BinanceExecClientConfig
             Configured execution client
         """
+        # Load only the specific instrument we're trading
+        # This avoids loading testnet instruments with non-ASCII characters
+        instrument_id_obj = InstrumentId.from_str(instrument_id)
+
         return BinanceExecClientConfig(
             api_key=api_key,
             api_secret=api_secret,
@@ -741,6 +753,9 @@ class LiveRunner(BaseRunner):
             max_retries=3,  # Retry failed requests
             retry_delay_initial_ms=500,  # Initial retry delay
             retry_delay_max_ms=3000,  # Max retry delay
+            instrument_provider=InstrumentProviderConfig(
+                load_ids=frozenset([instrument_id_obj]),
+            ),
         )
 
     def get_runner_name(self) -> str:
