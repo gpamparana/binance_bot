@@ -266,6 +266,11 @@ class BaseRunner(ABC):
         BinanceDataClientConfig
             Configured data client
         """
+        # Load only the specific instrument we're trading
+        # This avoids loading testnet instruments with non-ASCII characters
+        # which cause Nautilus Rust panics
+        instrument_id_obj = InstrumentId.from_str(instrument_id)
+
         return BinanceDataClientConfig(
             api_key=api_key,
             api_secret=api_secret,
@@ -274,7 +279,7 @@ class BaseRunner(ABC):
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
             base_url_ws=venue_cfg.api.ws_url if venue_cfg.api.ws_url else None,
             instrument_provider=InstrumentProviderConfig(
-                load_all=True,  # Load all instruments (temporary workaround)
+                load_ids=frozenset([instrument_id_obj]),
             ),
         )
 
