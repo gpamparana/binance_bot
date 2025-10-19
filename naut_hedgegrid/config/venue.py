@@ -24,6 +24,7 @@ class APIConfig(BaseModel):
     api_secret: str = Field(description="API secret (can use ${ENV_VAR} syntax)")
     testnet: bool = Field(default=False, description="Use testnet/sandbox environment")
     base_url: HttpUrl | None = Field(default=None, description="Custom base URL for API")
+    ws_url: str | None = Field(default=None, description="Custom WebSocket URL")
 
 
 class TradingConfig(BaseModel):

@@ -33,9 +33,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 cp .env.example .env
 
 # Edit .env and add your Binance API keys
-# Get keys from: https://www.binance.com/en/my/settings/api-management
-BINANCE_API_KEY=your_api_key_here
-BINANCE_API_SECRET=your_api_secret_here
+# For TESTNET (recommended): Get keys from https://testnet.binancefuture.com
+# For PRODUCTION: Get keys from https://www.binance.com/en/my/settings/api-management
+BINANCE_TESTNET_API_KEY=your_testnet_key_here
+BINANCE_TESTNET_API_SECRET=your_testnet_secret_here
 
 # Source the environment variables
 set -a; source .env; set +a
@@ -140,15 +141,60 @@ Key sections explained:
 
 ### Step 3: Run Backtest
 
+**Quick Run** (logs to console only):
 ```bash
-# From project root
 uv run python -m naut_hedgegrid backtest
+```
 
-# Or with custom config
+**Easiest: Use Helper Script** (automatic log capture):
+```bash
+# Run with default configs
+./scripts/run_backtest_with_logs.sh
+
+# Run with custom configs
+./scripts/run_backtest_with_logs.sh \
+    configs/backtest/my_backtest.yaml \
+    configs/strategies/my_strategy.yaml
+```
+
+This automatically saves logs to `reports/YYYYMMDD_HHMMSS_backtest.log`.
+
+**Manual: Save Logs to File** (for any backtest >1 week):
+```bash
+# Create reports directory first if needed
+mkdir -p reports
+
+# Run with log capture (shows in console AND saves to file)
+uv run python -m naut_hedgegrid backtest 2>&1 | tee reports/my_backtest.log
+
+# Alternative: Save to specific run directory
+RUN_ID=$(date +%Y%m%d_%H%M%S)
+uv run python -m naut_hedgegrid backtest 2>&1 | tee reports/$RUN_ID/backtest.log
+```
+
+**Save Logs Without Console Output**:
+```bash
+uv run python -m naut_hedgegrid backtest > backtest.log 2>&1
+```
+
+**With Custom Configs**:
+```bash
 uv run python -m naut_hedgegrid backtest \
     --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
-    --strategy-config configs/strategies/hedge_grid_v1.yaml
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    2>&1 | tee reports/my_backtest.log
 ```
+
+#### Important: Why Use `tee` for Log Capture
+
+NautilusTrader generates 10,000+ log lines during backtests. **For backtests >1 week, always use `tee`** because:
+
+1. **Terminal buffers are limited** (typically 10K-100K lines max)
+2. **Older logs scroll off** as new ones arrive - you'll only see the last portion
+3. **Backtests complete successfully** but you lose the log history
+4. **The `tee` command captures everything** to a file while also showing in console
+
+Without `tee`, a 1-month backtest will only show the last ~1 week of logs in your terminal. The backtest itself works fine and saves all results to the `reports/` directory, but the detailed logs are lost.
 
 ### Step 4: Expected Output
 

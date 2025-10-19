@@ -272,6 +272,7 @@ class BaseRunner(ABC):
             account_type=BinanceAccountType.USDT_FUTURES,
             testnet=venue_cfg.api.testnet,
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
+            base_url_ws=venue_cfg.api.ws_url if venue_cfg.api.ws_url else None,
             instrument_provider=InstrumentProviderConfig(
                 load_all=True,  # Load all instruments (temporary workaround)
             ),
@@ -311,64 +312,6 @@ class BaseRunner(ABC):
             strategies=[strategy_config],
         )
 
-    def validate_environment(self, require_api_keys: bool = False) -> tuple[str | None, str | None]:
-        """Validate environment variables and API credentials.
-
-        Parameters
-        ----------
-        require_api_keys : bool
-            If True, API keys are required and missing keys will raise an error
-
-        Returns
-        -------
-        tuple[str | None, str | None]
-            API key and secret (may be None if not required)
-        """
-        api_key = os.getenv("BINANCE_API_KEY")
-        api_secret = os.getenv("BINANCE_API_SECRET")
-
-        if require_api_keys:
-            if not api_key or not api_secret:
-                self.console.print(
-                    "[red]Error: BINANCE_API_KEY and BINANCE_API_SECRET "
-                    "environment variables required[/red]"
-                )
-                self.console.print("[yellow]Set with:[/yellow]")
-                self.console.print("[yellow]  export BINANCE_API_KEY=your_key[/yellow]")
-                self.console.print("[yellow]  export BINANCE_API_SECRET=your_secret[/yellow]")
-                sys.exit(1)
-
-            self.console.print("[green]✓[/green] BINANCE_API_KEY found")
-            self.console.print("[green]✓[/green] BINANCE_API_SECRET found")
-        elif not api_key or not api_secret:
-            self.console.print(
-                "[yellow]⚠ Warning: BINANCE_API_KEY and BINANCE_API_SECRET not set[/yellow]"
-            )
-            self.console.print(
-                "[yellow]  Binance requires API authentication to load instrument definitions.[/yellow]"
-            )
-            self.console.print(
-                "[yellow]  Paper trading mode will likely fail without credentials.[/yellow]"
-            )
-            self.console.print()
-            self.console.print("[yellow]  To fix, set your Binance API keys:[/yellow]")
-            self.console.print("[yellow]    export BINANCE_API_KEY=your_key[/yellow]")
-            self.console.print("[yellow]    export BINANCE_API_SECRET=your_secret[/yellow]")
-            self.console.print()
-            self.console.print(
-                "[yellow]  Note: Paper trading uses simulated execution - "
-                "API keys are only[/yellow]"
-            )
-            self.console.print(
-                "[yellow]        used to fetch instrument specifications, "
-                "no real orders will be placed.[/yellow]"
-            )
-        else:
-            self.console.print("[green]✓[/green] BINANCE_API_KEY found")
-            self.console.print("[green]✓[/green] BINANCE_API_SECRET found")
-
-        return api_key, api_secret
-
     def load_configs(
         self,
         strategy_config: str,
@@ -388,8 +331,6 @@ class BaseRunner(ABC):
         tuple[Path, HedgeGridConfig, Path, VenueConfig]
             Paths and loaded configurations
         """
-        self.console.print("[bold]Loading configurations...[/bold]")
-
         # Load strategy config
         strat_config_path = Path(strategy_config)
         if not strat_config_path.exists():
@@ -457,16 +398,30 @@ class BaseRunner(ABC):
         self.console.print()
 
         try:
-            # Validate environment
-            if require_api_keys:
-                self.console.print("[bold]Validating environment variables...[/bold]")
-            api_key, api_secret = self.validate_environment(require_api_keys)
-            self.console.print()
-
-            # Load configurations
+            # Load configurations first to see which env vars are needed
+            self.console.print("[bold]Loading configurations...[/bold]")
             strat_config_path, hedge_grid_cfg, venue_config_path, venue_cfg = self.load_configs(
                 strategy_config, venue_config
             )
+
+            # Extract API keys from venue config (already resolved from env vars)
+            api_key = venue_cfg.api.api_key
+            api_secret = venue_cfg.api.api_secret
+
+            # Validate that API keys are present if required
+            if require_api_keys:
+                self.console.print("[bold]Validating API credentials...[/bold]")
+                if not api_key or not api_secret:
+                    self.console.print(
+                        "[red]Error: API credentials not found in venue config[/red]"
+                    )
+                    self.console.print(
+                        "[yellow]Check that your .env file has the correct environment variables:[/yellow]"
+                    )
+                    self.console.print(f"[yellow]  Venue config: {venue_config_path.name}[/yellow]")
+                    sys.exit(1)
+                self.console.print("[green]✓[/green] API credentials found in venue config")
+            self.console.print()
 
             # Get instrument ID from strategy config
             instrument_id = hedge_grid_cfg.strategy.instrument_id
@@ -776,6 +731,7 @@ class LiveRunner(BaseRunner):
             account_type=BinanceAccountType.USDT_FUTURES,
             testnet=venue_cfg.api.testnet,
             base_url_http=str(venue_cfg.api.base_url) if venue_cfg.api.base_url else None,
+            base_url_ws=venue_cfg.api.ws_url if venue_cfg.api.ws_url else None,
             use_reduce_only=False,  # CRITICAL: False for hedge mode
         )
 

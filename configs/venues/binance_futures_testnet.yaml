@@ -1,19 +1,19 @@
-# Binance Futures PRODUCTION Configuration
-# ⚠️  WARNING: THIS USES REAL MONEY - USE TESTNET FOR TESTING ⚠️
-# For risk-free testing, use binance_futures_testnet.yaml instead
-# Environment variables can be referenced with ${VAR_NAME}
+# Binance Futures TESTNET Configuration
+# Use this for risk-free testing with fake funds
+# Get testnet API keys from: https://testnet.binancefuture.com
 
 venue:
   name: BINANCE
   venue_type: futures
   account_type: PERPETUAL_LINEAR
 
-# API Configuration - PRODUCTION
+# API Configuration - TESTNET
 api:
-  api_key: ${BINANCE_API_KEY}
-  api_secret: ${BINANCE_API_SECRET}
-  testnet: false  # Set to true for testnet (or use binance_futures_testnet.yaml)
-  base_url: https://fapi.binance.com  # Production URL
+  api_key: ${BINANCE_TESTNET_API_KEY}
+  api_secret: ${BINANCE_TESTNET_API_SECRET}
+  testnet: true  # CRITICAL: Must be true for testnet
+  base_url: https://testnet.binancefuture.com  # Testnet URL
+  ws_url: wss://fstream.binancefuture.com  # Testnet WebSocket URL
 
 # Trading Configuration
 trading:
@@ -32,7 +32,7 @@ precision:
   quantity_precision: 3
   min_notional: 5.0
 
-# Rate Limits
+# Rate Limits (testnet may have different limits)
 rate_limits:
   orders_per_second: 5
   orders_per_minute: 100
