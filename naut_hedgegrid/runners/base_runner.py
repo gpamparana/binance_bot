@@ -11,6 +11,11 @@ Key Features:
     - Rich console output
 """
 
+# Apply testnet patch BEFORE any Nautilus imports to avoid non-ASCII crashes
+from naut_hedgegrid.adapters.binance_testnet_patch import patch_binance_futures_for_testnet
+
+patch_binance_futures_for_testnet()
+
 import os
 import signal
 import sys
