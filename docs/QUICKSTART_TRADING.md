@@ -1,5 +1,7 @@
 # Quick Start Guide - Trading with NautilusTrader
 
+set -a; source .env; set +a
+
 uv run python -m naut_hedgegrid live \
     --strategy-config configs/strategies/hedge_grid_v1.yaml \
     --venue-config configs/venues/binance_futures_testnet.yaml \
