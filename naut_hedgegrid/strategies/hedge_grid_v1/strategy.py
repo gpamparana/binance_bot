@@ -267,8 +267,9 @@ class HedgeGridV1(Strategy):
         self._maker_fills = 0
         self.log.info("Metrics tracking initialized")
 
-        # Initialize risk management
-        self._initialize_risk_management()
+        # Risk management is already initialized in __init__
+        # All risk checks (_check_circuit_breaker, _check_drawdown_limit)
+        # are called during trading operations
 
         # Perform warmup if configured
         # The warmup will fetch historical data and pre-warm the regime detector
