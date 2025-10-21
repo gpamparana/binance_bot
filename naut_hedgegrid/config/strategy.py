@@ -148,6 +148,12 @@ class PositionConfig(BaseModel):
         le=1,
         description="Safety buffer from liquidation price (0.15 = 15%)",
     )
+    max_position_pct: float = Field(
+        default=0.95,
+        ge=0.1,
+        le=1.0,
+        description="Maximum position as percentage of available balance (0.95 = 95%)",
+    )
 
     @field_validator("max_leverage_used")
     @classmethod
@@ -188,13 +194,48 @@ class PolicyConfig(BaseModel):
     )
 
 
+class RiskManagementConfig(BaseModel):
+    """Advanced risk management and circuit breaker configuration."""
+
+    max_errors_per_minute: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum errors allowed per minute before circuit breaker activates",
+    )
+    circuit_breaker_cooldown_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="Cooldown period in seconds after circuit breaker activation",
+    )
+    max_drawdown_pct: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=50.0,
+        description="Maximum drawdown percentage before emergency position flattening",
+    )
+    enable_position_validation: bool = Field(
+        default=True,
+        description="Validate order size against account balance before submission",
+    )
+    enable_circuit_breaker: bool = Field(
+        default=True,
+        description="Enable circuit breaker for error rate monitoring",
+    )
+    enable_drawdown_protection: bool = Field(
+        default=True,
+        description="Enable automatic position flattening on max drawdown",
+    )
+
+
 class HedgeGridConfig(BaseModel):
     """
     Complete hedge grid strategy configuration.
 
     This model contains all parameters needed to run the hedge grid
     trading strategy, including grid setup, exits, funding filters,
-    regime detection, and position sizing.
+    regime detection, position sizing, and comprehensive risk management.
     """
 
     strategy: StrategyDetails = Field(description="Strategy identification")
@@ -206,6 +247,10 @@ class HedgeGridConfig(BaseModel):
     regime: RegimeConfig = Field(description="Regime detection")
     position: PositionConfig = Field(description="Position sizing")
     policy: PolicyConfig = Field(description="Placement policy for inventory biasing")
+    risk_management: RiskManagementConfig | None = Field(
+        default_factory=RiskManagementConfig,
+        description="Advanced risk management and circuit breaker settings",
+    )
 
 
 class HedgeGridConfigLoader(BaseYamlConfigLoader):
