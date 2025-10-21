@@ -929,10 +929,28 @@ class HedgeGridV1(Strategy):
         # Note: We need to use dataclass.replace since OrderIntent is frozen
         from dataclasses import replace
 
-        # Generate new unique order ID for retry (add counter suffix)
-        with self._order_id_lock:
-            self._order_id_counter += 1
-            new_client_order_id = f"{client_order_id}-retry{new_attempt}-{self._order_id_counter}"
+        # Generate new unique order ID for retry
+        # Extract base order ID without any retry suffixes
+        base_order_id = client_order_id.split("-retry")[0] if "-retry" in client_order_id else client_order_id
+        base_order_id = base_order_id.split("-R")[0] if "-R" in base_order_id else base_order_id
+
+        # Create compact retry ID that stays under 36 char limit
+        # Format: {base_id}-R{attempt} (e.g., HG1-LONG-01-1761018780259-24 -> HG1-LONG-01-1761018780259-R1)
+        new_client_order_id = f"{base_order_id}-R{new_attempt}"
+
+        # Validate length to prevent Binance rejection
+        if len(new_client_order_id) > 36:
+            # If still too long, truncate the timestamp portion
+            parts = base_order_id.split("-")
+            if len(parts) >= 4:
+                # Shorten timestamp from 13 to 10 digits (millisecond precision instead of nanosecond)
+                parts[3] = parts[3][:10]
+                base_order_id = "-".join(parts)
+                new_client_order_id = f"{base_order_id}-R{new_attempt}"
+
+        self.log.debug(
+            f"Generated retry order ID: {new_client_order_id} (length: {len(new_client_order_id)})"
+        )
 
         new_intent = replace(
             intent,
@@ -1489,7 +1507,7 @@ class HedgeGridV1(Strategy):
         position_id = PositionId(position_id_str)
         position = self.cache.position(position_id)
 
-        if position and not position.is_flat():
+        if position and position.quantity > 0:
             # Return notional value in USDT
             return abs(float(position.quantity) * float(position.avg_px_open))
         return 0.0
@@ -1581,7 +1599,7 @@ class HedgeGridV1(Strategy):
             position_id = PositionId(position_id_str)
             position = self.cache.position(position_id)
 
-            if position and not position.is_flat():
+            if position and position.quantity > 0:
                 # Calculate unrealized PnL based on current price
                 current_price = Price(self._last_mid, precision=self._instrument.price_precision)
                 unrealized = float(position.unrealized_pnl(current_price))
@@ -1608,8 +1626,8 @@ class HedgeGridV1(Strategy):
         long_pos = self.cache.position(long_position_id)
         short_pos = self.cache.position(short_position_id)
 
-        long_qty = float(long_pos.quantity) if long_pos and not long_pos.is_flat() else 0.0
-        short_qty = float(short_pos.quantity) if short_pos and not short_pos.is_flat() else 0.0
+        long_qty = float(long_pos.quantity) if long_pos and long_pos.quantity > 0 else 0.0
+        short_qty = float(short_pos.quantity) if short_pos and short_pos.quantity > 0 else 0.0
 
         # Count TP/SL orders
         tp_orders = 0
@@ -1658,7 +1676,7 @@ class HedgeGridV1(Strategy):
         position_id = PositionId(position_id_str)
         position = self.cache.position(position_id)
 
-        if position and not position.is_flat():
+        if position and position.quantity > 0:
             # Determine closing side
             close_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
 
