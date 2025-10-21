@@ -269,7 +269,7 @@ class HedgeGridV1(Strategy):
             # Try to import the warmup module
             try:
                 from naut_hedgegrid.warmup import BinanceDataWarmer
-                from naut_hedgegrid.config.venue import VenueConfig
+                from naut_hedgegrid.config.venue import VenueConfig, VenueConfigLoader
             except ImportError as e:
                 self.log.warning(f"Warmup module not available: {e}, starting without warmup")
                 return
@@ -283,20 +283,66 @@ class HedgeGridV1(Strategy):
                 self.log.warning("No Binance API credentials found, skipping warmup")
                 return
 
-            # Create minimal venue config for warmup
-            # We only need API access to fetch historical data
-            venue_config = VenueConfig(
-                api=type('ApiConfig', (), {
-                    'testnet': self.config.testnet,
-                    'api_key': api_key,
-                    'api_secret': api_secret,
-                })(),
-                trading=type('TradingConfig', (), {
-                    'hedge_mode': True,
-                    'position_mode': 'Hedge',
-                    'leverage': 1,
-                })(),
-            )
+            # Try to load venue config from file or create minimal config
+            try:
+                # First try to load from standard locations
+                import pathlib
+
+                # Check common venue config paths
+                config_paths = [
+                    pathlib.Path("configs/venues/binance_testnet.yaml"),
+                    pathlib.Path("configs/venues/binance.yaml"),
+                ]
+
+                venue_config = None
+                for config_path in config_paths:
+                    if config_path.exists():
+                        try:
+                            venue_config = VenueConfigLoader.load(str(config_path))
+                            break
+                        except Exception:
+                            continue
+
+                # If no config found or testnet flag differs, create minimal config
+                if venue_config is None or venue_config.api.testnet != self.config.testnet:
+                    # Create minimal config dict matching VenueConfig schema
+                    venue_config_dict = {
+                        "venue": "BINANCE",
+                        "api": {
+                            "api_key": api_key,
+                            "api_secret": api_secret,
+                            "testnet": self.config.testnet,
+                        },
+                        "trading": {
+                            "hedge_mode": True,
+                            "position_mode": "Hedge",
+                            "leverage": 1,
+                        },
+                        "risk": {
+                            "max_position_size": 1.0,
+                            "max_order_size": 1.0,
+                            "max_daily_loss": 10000.0,
+                            "max_open_orders": 100,
+                        },
+                        "precision": {
+                            "price_precision": 2,
+                            "quantity_precision": 3,
+                        },
+                        "rate_limits": {
+                            "orders_per_second": 10,
+                            "weight_per_minute": 1200,
+                        },
+                        "websocket": {
+                            "heartbeat_interval": 30,
+                            "reconnect_delay": 5,
+                            "max_reconnect_attempts": 10,
+                        },
+                    }
+                    venue_config = VenueConfig.model_validate(venue_config_dict)
+
+            except Exception as e:
+                self.log.warning(f"Could not create venue config for warmup: {e}")
+                return
 
             # Extract symbol from instrument ID
             symbol = str(self.instrument_id).split("-")[0]
