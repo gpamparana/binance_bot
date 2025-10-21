@@ -608,10 +608,11 @@ class HedgeGridV1(Strategy):
         self._execute_diff(diff_result)
 
         # Diagnostic logging for fill monitoring (every 5 minutes)
-        if self.clock.timestamp_ns % 300_000_000_000 < 60_000_000_000:  # Within first minute of 5-min window
+        current_time = self.clock.timestamp_ns()
+        if current_time % 300_000_000_000 < 60_000_000_000:  # Within first minute of 5-min window
             if not hasattr(self, '_last_diagnostic_log') or \
-               self.clock.timestamp_ns - self._last_diagnostic_log >= 300_000_000_000:
-                self._last_diagnostic_log = self.clock.timestamp_ns
+               current_time - self._last_diagnostic_log >= 300_000_000_000:
+                self._last_diagnostic_log = current_time
                 self._log_diagnostic_status()
 
     def on_event(self, event: Event) -> None:
