@@ -82,34 +82,35 @@ class GridEngine:
         qty_scale_decimal = Decimal(str(cfg.grid.qty_scale))
 
         for level in range(1, cfg.grid.grid_levels_long + 1):
-            # Price below mid (using Decimal for precision)
+            # Price below mid (keep as Decimal for precision)
             price_decimal = mid_decimal - (Decimal(level) * price_step)
-            price = float(price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            price_decimal = price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-            # Geometric quantity scaling (using Decimal)
+            # Geometric quantity scaling (keep as Decimal)
             qty_decimal = base_qty_decimal * (qty_scale_decimal ** (level - 1))
-            qty = float(qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
+            qty_decimal = qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)
 
-            # TP above entry, SL below entry
-            tp = None
+            # TP above entry, SL below entry (keep as Decimal)
+            tp_decimal = None
             if cfg.exit.tp_steps > 0:
                 tp_decimal = price_decimal + (Decimal(cfg.exit.tp_steps) * price_step)
-                tp = float(tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                tp_decimal = tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-            sl = None
+            sl_decimal = None
             if cfg.exit.sl_steps > 0:
                 sl_decimal = price_decimal - (Decimal(cfg.exit.sl_steps) * price_step)
                 # Ensure SL is positive
                 if sl_decimal <= 0:
                     sl_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
-                sl = float(sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                sl_decimal = sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+            # Only convert to float at the very end when creating Rung
             rung = Rung(
-                price=price,
-                qty=qty,
+                price=float(price_decimal),
+                qty=float(qty_decimal),
                 side=Side.LONG,
-                tp=tp,
-                sl=sl,
+                tp=float(tp_decimal) if tp_decimal else None,
+                sl=float(sl_decimal) if sl_decimal else None,
             )
             rungs.append(rung)
 
@@ -138,34 +139,35 @@ class GridEngine:
         qty_scale_decimal = Decimal(str(cfg.grid.qty_scale))
 
         for level in range(1, cfg.grid.grid_levels_short + 1):
-            # Price above mid (using Decimal for precision)
+            # Price above mid (keep as Decimal for precision)
             price_decimal = mid_decimal + (Decimal(level) * price_step)
-            price = float(price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            price_decimal = price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-            # Geometric quantity scaling (using Decimal)
+            # Geometric quantity scaling (keep as Decimal)
             qty_decimal = base_qty_decimal * (qty_scale_decimal ** (level - 1))
-            qty = float(qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
+            qty_decimal = qty_decimal.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)
 
-            # TP below entry, SL above entry
-            tp = None
+            # TP below entry, SL above entry (keep as Decimal)
+            tp_decimal = None
             if cfg.exit.tp_steps > 0:
                 tp_decimal = price_decimal - (Decimal(cfg.exit.tp_steps) * price_step)
                 # Ensure TP is positive
                 if tp_decimal <= 0:
                     tp_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
-                tp = float(tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                tp_decimal = tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-            sl = None
+            sl_decimal = None
             if cfg.exit.sl_steps > 0:
                 sl_decimal = price_decimal + (Decimal(cfg.exit.sl_steps) * price_step)
-                sl = float(sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                sl_decimal = sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+            # Only convert to float at the very end when creating Rung
             rung = Rung(
-                price=price,
-                qty=qty,
+                price=float(price_decimal),
+                qty=float(qty_decimal),
                 side=Side.SHORT,
-                tp=tp,
-                sl=sl,
+                tp=float(tp_decimal) if tp_decimal else None,
+                sl=float(sl_decimal) if sl_decimal else None,
             )
             rungs.append(rung)
 

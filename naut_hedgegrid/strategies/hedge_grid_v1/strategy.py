@@ -1,6 +1,8 @@
 """HedgeGridV1 trading strategy implementation."""
 
 import threading
+import time
+from collections import deque
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from functools import lru_cache
@@ -106,8 +108,6 @@ class HedgeGridV1(Strategy):
         # Operational controls state
         self._kill_switch = None
         self._throttle: float = 1.0  # Default to full aggressiveness
-        # Note: No lock needed for ladder snapshots - Python reference assignment is atomic
-        # Lock only used for complex operations like position flattening
 
         # Metrics tracking
         self._start_time: int | None = None
@@ -126,6 +126,33 @@ class HedgeGridV1(Strategy):
         # Ladder state for snapshot access
         self._last_long_ladder: Ladder | None = None
         self._last_short_ladder: Ladder | None = None
+
+        # =====================================================================
+        # RISK MANAGEMENT COMPONENTS
+        # =====================================================================
+
+        # Circuit breaker for error monitoring
+        self._error_window: deque = deque(maxlen=100)  # Track last 100 errors with timestamps
+        self._circuit_breaker_active: bool = False
+        self._circuit_breaker_reset_time: float | None = None
+
+        # Drawdown protection
+        self._peak_balance: float = 0.0
+        self._initial_balance: float | None = None
+        self._drawdown_protection_triggered: bool = False
+
+        # Position validation
+        self._last_balance_check: float = 0.0
+        self._balance_check_interval: int = 60_000_000_000  # 60 seconds in nanoseconds
+        self._ladder_lock = threading.Lock()  # Thread safety for ladder snapshots
+
+        # Error recovery state
+        self._critical_error = False  # Flag to indicate critical error state
+        self._pause_trading = False  # Flag to pause trading after critical error
+
+        # Performance optimization: internal grid order tracking (O(1) lookups)
+        self._grid_orders_cache: dict[str, LiveOrder] = {}  # Track grid orders by client_order_id
+        self._grid_orders_lock = threading.Lock()  # Thread safety for grid order cache
 
     def on_start(self) -> None:
         """
@@ -239,6 +266,9 @@ class HedgeGridV1(Strategy):
         self._total_fills = 0
         self._maker_fills = 0
         self.log.info("Metrics tracking initialized")
+
+        # Initialize risk management
+        self._initialize_risk_management()
 
         # Perform warmup if configured
         # The warmup will fetch historical data and pre-warm the regime detector
@@ -564,11 +594,13 @@ class HedgeGridV1(Strategy):
 
         # Store ladder state for snapshot access (before any filtering)
         # Note: Python reference assignment is atomic, no lock needed
-        for ladder in ladders:
-            if ladder.side == Side.LONG:
-                self._last_long_ladder = ladder
-            elif ladder.side == Side.SHORT:
-                self._last_short_ladder = ladder
+        # Update ladder state with thread safety
+        with self._ladder_lock:
+            for ladder in ladders:
+                if ladder.side == Side.LONG:
+                    self._last_long_ladder = ladder
+                elif ladder.side == Side.SHORT:
+                    self._last_short_ladder = ladder
 
         # Apply placement policy
         ladders = PlacementPolicy.shape_ladders(
@@ -638,7 +670,7 @@ class HedgeGridV1(Strategy):
 
     def on_order_filled(self, event: OrderFilled) -> None:
         """
-        Handle order filled event.
+        Handle order filled event with comprehensive error recovery.
 
         When a grid order fills:
         1. Parse client_order_id to get original rung metadata
@@ -651,159 +683,177 @@ class HedgeGridV1(Strategy):
             event: Order filled event
 
         """
-        self.log.info(f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}")
-
-        client_order_id = str(event.client_order_id.value)
-
-        # Clean up retry tracking (order filled successfully)
-        if client_order_id in self._pending_retries:
-            del self._pending_retries[client_order_id]
-            if self._retry_handler is not None:
-                self._retry_handler.clear_history(client_order_id)
-
-        # Track fill statistics for metrics (atomic integer increment)
-        self._total_fills += 1
-        if event.liquidity_side == LiquiditySide.MAKER:
-            self._maker_fills += 1
-
-        # Get the filled order
-        order = self.cache.order(event.client_order_id)
-        if order is None:
-            self.log.warning(f"Could not find order {event.client_order_id} in cache")
-            return
-
-        # Only handle grid orders (not TP/SL orders)
-        if not event.client_order_id.value.startswith(self._strategy_name):
-            return
-
-        # Parse client_order_id to get level and side
         try:
-            parsed = self._parse_cached_order_id(event.client_order_id.value)
-            side = parsed["side"]
-            level = parsed["level"]
-        except (ValueError, KeyError) as e:
-            self.log.warning(f"Could not parse client_order_id {event.client_order_id}: {e}")
-            return
-
-        # Add null checks for parsed values
-        if side is None or level is None:
-            self.log.error(f"Parsed side or level is None for {event.client_order_id}")
-            return
-
-        # Thread-safe check and add for duplicate prevention
-        fill_key = f"{side.value}-{level}"
-        with self._fills_lock:
-            if fill_key in self._fills_with_exits:
-                self.log.debug(f"TP/SL already exist for {fill_key}, skipping creation")
+            # Check if we're in critical error state
+            if self._critical_error:
+                self.log.warning(f"Strategy in critical error state, ignoring fill event: {event.client_order_id}")
                 return
-            # Immediately add to set to claim this fill (prevents race condition)
-            self._fills_with_exits.add(fill_key)
 
-        # Calculate TP/SL prices based on grid configuration
-        if self._hedge_grid_config is None or self._last_mid is None:
-            self.log.warning("Cannot create TP/SL: config or mid price missing")
-            return
+            self.log.info(f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}")
 
-        fill_price = float(event.last_px)
-        fill_qty = float(event.last_qty)
+            client_order_id = str(event.client_order_id.value)
 
-        # Calculate price step using Decimal for precision
-        mid_decimal = Decimal(str(self._last_mid))
-        fill_price_decimal = Decimal(str(fill_price))
-        step_bps = Decimal(str(self._hedge_grid_config.grid.grid_step_bps))
-        price_step = mid_decimal * (step_bps / Decimal("10000"))
+            # Clean up retry tracking (order filled successfully)
+            if client_order_id in self._pending_retries:
+                del self._pending_retries[client_order_id]
+                if self._retry_handler is not None:
+                    self._retry_handler.clear_history(client_order_id)
 
-        # Calculate TP/SL based on side using Decimal
-        if side == Side.LONG:
-            # LONG: TP above entry, SL below entry
-            tp_price_decimal = fill_price_decimal + (
-                Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-            )
-            tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Track fill statistics for metrics (atomic integer increment)
+            self._total_fills += 1
+            if event.liquidity_side == LiquiditySide.MAKER:
+                self._maker_fills += 1
 
-            sl_price_decimal = fill_price_decimal - (
-                Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-            )
-            if sl_price_decimal <= 0:
-                sl_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
-            sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-        else:
-            # SHORT: TP below entry, SL above entry
-            tp_price_decimal = fill_price_decimal - (
-                Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-            )
-            if tp_price_decimal <= 0:
-                tp_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
-            tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Remove filled grid order from internal cache
+            if "-TP-" not in client_order_id and "-SL-" not in client_order_id:
+                with self._grid_orders_lock:
+                    self._grid_orders_cache.pop(client_order_id, None)
 
-            sl_price_decimal = fill_price_decimal + (
-                Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-            )
-            sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Get the filled order
+            order = self.cache.order(event.client_order_id)
+            if order is None:
+                self.log.warning(f"Could not find order {event.client_order_id} in cache")
+                return
 
-        self.log.info(
-            f"[TP/SL CREATION] Creating exit orders for {side} fill @ {fill_price:.2f}: "
-            f"TP={tp_price:.2f} ({self._hedge_grid_config.exit.tp_steps} steps), "
-            f"SL={sl_price:.2f} ({self._hedge_grid_config.exit.sl_steps} steps)"
-        )
+            # Only handle grid orders (not TP/SL orders)
+            if not event.client_order_id.value.startswith(self._strategy_name):
+                return
 
-        # Check instrument is available before creating orders
-        if self._instrument is None:
-            self.log.error("Cannot create TP/SL: instrument not initialized")
-            # Remove from tracking since we failed to create orders
+            # Parse client_order_id to get level and side
+            try:
+                parsed = self._parse_cached_order_id(event.client_order_id.value)
+                side = parsed["side"]
+                level = parsed["level"]
+            except (ValueError, KeyError) as e:
+                self.log.warning(f"Could not parse client_order_id {event.client_order_id}: {e}")
+                return
+
+            # Add null checks for parsed values
+            if side is None or level is None:
+                self.log.error(f"Parsed side or level is None for {event.client_order_id}")
+                return
+
+            # Thread-safe check and add for duplicate prevention - FIXED: check inside lock
+            fill_key = f"{side.value}-{level}"
             with self._fills_lock:
-                self._fills_with_exits.discard(fill_key)
-            return
+                if fill_key in self._fills_with_exits:
+                    self.log.debug(f"TP/SL already exist for {fill_key}, skipping creation")
+                    return
+                # Immediately add to set to claim this fill (prevents race condition)
+                self._fills_with_exits.add(fill_key)
 
-        # Create position_id with side suffix
-        position_id = PositionId(f"{self.instrument_id}-{side.value}")
+            # Calculate TP/SL prices based on grid configuration
+            if self._hedge_grid_config is None or self._last_mid is None:
+                self.log.warning("Cannot create TP/SL: config or mid price missing")
+                return
 
-        try:
-            # Create TP limit order (reduce-only)
-            tp_order = self._create_tp_order(
-                side=side,
-                quantity=fill_qty,
-                tp_price=tp_price,
-                position_id=position_id,
-                level=level,  # type: ignore[arg-type]
+            fill_price = float(event.last_px)
+            fill_qty = float(event.last_qty)
+
+            # Calculate price step using Decimal for precision
+            mid_decimal = Decimal(str(self._last_mid))
+            fill_price_decimal = Decimal(str(fill_price))
+            step_bps = Decimal(str(self._hedge_grid_config.grid.grid_step_bps))
+            price_step = mid_decimal * (step_bps / Decimal("10000"))
+
+            # Calculate TP/SL based on side using Decimal
+            if side == Side.LONG:
+                # LONG: TP above entry, SL below entry
+                tp_price_decimal = fill_price_decimal + (
+                    Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+                )
+                tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+                sl_price_decimal = fill_price_decimal - (
+                    Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+                )
+                if sl_price_decimal <= 0:
+                    sl_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
+                sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            else:
+                # SHORT: TP below entry, SL above entry
+                tp_price_decimal = fill_price_decimal - (
+                    Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+                )
+                if tp_price_decimal <= 0:
+                    tp_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
+                tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+                sl_price_decimal = fill_price_decimal + (
+                    Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+                )
+                sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+            self.log.info(
+                f"[TP/SL CREATION] Creating exit orders for {side} fill @ {fill_price:.2f}: "
+                f"TP={tp_price:.2f} ({self._hedge_grid_config.exit.tp_steps} steps), "
+                f"SL={sl_price:.2f} ({self._hedge_grid_config.exit.sl_steps} steps)"
             )
 
-            # Create SL stop-market order (reduce-only)
-            sl_order = self._create_sl_order(
-                side=side,
-                quantity=fill_qty,
-                sl_price=sl_price,
-                position_id=position_id,
-                level=level,  # type: ignore[arg-type]
-            )
-
-            # Validate orders were created successfully
-            if tp_order is None or sl_order is None:
-                self.log.error(f"Failed to create TP or SL order for {fill_key}")
-                # Remove from tracking since we failed
+            # Check instrument is available before creating orders
+            if self._instrument is None:
+                self.log.error("Cannot create TP/SL: instrument not initialized")
+                # Remove from tracking since we failed to create orders
                 with self._fills_lock:
                     self._fills_with_exits.discard(fill_key)
                 return
 
-            # Submit orders
-            self.submit_order(tp_order, position_id=position_id)
-            self.submit_order(sl_order, position_id=position_id)
+            # Create position_id with side suffix
+            position_id = PositionId(f"{self.instrument_id}-{side.value}")
 
-            self.log.info(
-                f"[TP/SL SUBMITTED] Successfully submitted TP/SL orders for {fill_key}: "
-                f"TP ID={tp_order.client_order_id}, SL ID={sl_order.client_order_id}"
-            )
+            try:
+                # Create TP limit order (reduce-only)
+                tp_order = self._create_tp_order(
+                    side=side,
+                    quantity=fill_qty,
+                    tp_price=tp_price,
+                    position_id=position_id,
+                    level=level,  # type: ignore[arg-type]
+                )
 
-            # Note: fill_key already added to _fills_with_exits above
-            
+                # Create SL stop-market order (reduce-only)
+                sl_order = self._create_sl_order(
+                    side=side,
+                    quantity=fill_qty,
+                    sl_price=sl_price,
+                    position_id=position_id,
+                    level=level,  # type: ignore[arg-type]
+                )
+
+                # Validate orders were created successfully
+                if tp_order is None or sl_order is None:
+                    self.log.error(f"Failed to create TP or SL order for {fill_key}")
+                    # Remove from tracking since we failed
+                    with self._fills_lock:
+                        self._fills_with_exits.discard(fill_key)
+                    return
+
+                # Submit orders
+                self.submit_order(tp_order, position_id=position_id)
+                self.submit_order(sl_order, position_id=position_id)
+
+                self.log.info(
+                    f"[TP/SL SUBMITTED] Successfully submitted TP/SL orders for {fill_key}: "
+                    f"TP ID={tp_order.client_order_id}, SL ID={sl_order.client_order_id}"
+                )
+
+                # Note: fill_key already added to _fills_with_exits above
+
+            except Exception as e:
+                # On any failure, remove from set to allow retry
+                with self._fills_lock:
+                    self._fills_with_exits.discard(fill_key)
+                self.log.error(f"Failed to create/submit TP/SL for {fill_key}: {e}", exc_info=True)
+                return
+
+            self.log.info(f"Submitted TP/SL orders for level {level}")
+
         except Exception as e:
-            # On any failure, remove from set to allow retry
-            with self._fills_lock:
-                self._fills_with_exits.discard(fill_key)
-            self.log.error(f"Failed to create/submit TP/SL for {fill_key}: {e}", exc_info=True)
-            return
-
-        self.log.info(f"Submitted TP/SL orders for level {level}")
+            # Critical error handler for entire method
+            self.log.critical(f"Critical error in on_order_filled: {e}", exc_info=True)
+            self._handle_critical_error()
+            # Re-raise to ensure Nautilus knows about the error
+            raise
 
     def on_order_accepted(self, event: OrderAccepted) -> None:
         """
@@ -839,6 +889,23 @@ class HedgeGridV1(Strategy):
             else:
                 self.log.debug(f"Grid order accepted: {event.client_order_id}")
 
+                # Add grid order to internal cache for O(1) lookups
+                order = self.cache.order(event.client_order_id)
+                if order:
+                    try:
+                        parsed = self._parse_cached_order_id(client_order_id)
+                        live_order = LiveOrder(
+                            client_order_id=client_order_id,
+                            side=parsed["side"],  # type: ignore[arg-type]
+                            price=float(order.price) if hasattr(order, "price") else 0.0,
+                            qty=float(order.quantity),
+                            status="OPEN",
+                        )
+                        with self._grid_orders_lock:
+                            self._grid_orders_cache[client_order_id] = live_order
+                    except (ValueError, KeyError) as e:
+                        self.log.warning(f"Could not parse order for caching: {e}")
+
     def on_order_canceled(self, event: OrderCanceled) -> None:
         """
         Handle order canceled event.
@@ -850,8 +917,14 @@ class HedgeGridV1(Strategy):
 
         """
         # Log order cancellation
-        if event.client_order_id.value.startswith(self._strategy_name):
+        client_order_id = str(event.client_order_id.value)
+        if client_order_id.startswith(self._strategy_name):
             self.log.debug(f"Order canceled: {event.client_order_id}")
+
+            # Remove grid order from internal cache
+            if "-TP-" not in client_order_id and "-SL-" not in client_order_id:
+                with self._grid_orders_lock:
+                    self._grid_orders_cache.pop(client_order_id, None)
 
     def on_order_rejected(self, event: OrderRejected) -> None:
         """
@@ -868,138 +941,144 @@ class HedgeGridV1(Strategy):
             event: OrderRejected event from NautilusTrader
 
         """
-        client_order_id = str(event.client_order_id.value)
-        rejection_reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
+        try:
+            client_order_id = str(event.client_order_id.value)
+            rejection_reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
 
-        # Enhanced logging for TP/SL rejections
-        if "-TP-" in client_order_id:
-            self.log.error(f"[TP REJECTED] Take-profit order rejected: {client_order_id}, reason: {rejection_reason}")
-        elif "-SL-" in client_order_id:
-            self.log.error(f"[SL REJECTED] Stop-loss order rejected: {client_order_id}, reason: {rejection_reason}")
-        else:
-            self.log.warning(f"Grid order rejected: {client_order_id}, reason: {rejection_reason}")
+            # Enhanced logging for TP/SL rejections
+            if "-TP-" in client_order_id:
+                self.log.error(f"[TP REJECTED] Take-profit order rejected: {client_order_id}, reason: {rejection_reason}")
+            elif "-SL-" in client_order_id:
+                self.log.error(f"[SL REJECTED] Stop-loss order rejected: {client_order_id}, reason: {rejection_reason}")
+            else:
+                self.log.warning(f"Grid order rejected: {client_order_id}, reason: {rejection_reason}")
 
-        # Check if retry handler is initialized
-        if self._retry_handler is None or not self._retry_handler.enabled:
-            return
+            # Check if retry handler is initialized
+            if self._retry_handler is None or not self._retry_handler.enabled:
+                return
 
-        # Check if this order is in retry queue
-        if client_order_id not in self._pending_retries:
-            # Not tracking this order (maybe retry is disabled or already exhausted)
-            return
+            # Check if this order is in retry queue
+            if client_order_id not in self._pending_retries:
+                # Not tracking this order (maybe retry is disabled or already exhausted)
+                return
 
-        intent = self._pending_retries[client_order_id]
+            intent = self._pending_retries[client_order_id]
 
-        # Check if retry is warranted for this rejection type
-        if not self._retry_handler.should_retry(rejection_reason):
-            self.log.warning(
-                f"Order {client_order_id} rejected for non-retryable reason: {rejection_reason}"
+            # Check if retry is warranted for this rejection type
+            if not self._retry_handler.should_retry(rejection_reason):
+                self.log.warning(
+                    f"Order {client_order_id} rejected for non-retryable reason: {rejection_reason}"
+                )
+                del self._pending_retries[client_order_id]
+                self._retry_handler.clear_history(client_order_id)
+                return
+
+            # Check retry limit
+            if intent.retry_count >= self._hedge_grid_config.execution.retry_attempts:  # type: ignore[union-attr]
+                self.log.error(
+                    f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning"
+                )
+                del self._pending_retries[client_order_id]
+                self._retry_handler.clear_history(client_order_id)
+                return
+
+            # Adjust price for retry
+            new_attempt = intent.retry_count + 1
+            adjusted_price = self._retry_handler.adjust_price_for_retry(
+                original_price=intent.original_price or intent.price or 0.0,
+                side=intent.side or Side.LONG,
+                attempt=new_attempt,
             )
-            del self._pending_retries[client_order_id]
-            self._retry_handler.clear_history(client_order_id)
-            return
 
-        # Check retry limit
-        if intent.retry_count >= self._hedge_grid_config.execution.retry_attempts:  # type: ignore[union-attr]
-            self.log.error(
-                f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning"
+            # Record this retry attempt
+            self._retry_handler.record_attempt(
+                client_order_id=client_order_id,
+                attempt=new_attempt,
+                original_price=intent.original_price or intent.price or 0.0,
+                adjusted_price=adjusted_price,
+                reason=rejection_reason,
             )
+
+            # Create new intent with adjusted price AND NEW CLIENT_ORDER_ID
+            # Note: We need to use dataclass.replace since OrderIntent is frozen
+            from dataclasses import replace
+
+            # Generate new unique order ID for retry
+            # Extract base order ID without any retry suffixes
+            base_order_id = client_order_id.split("-retry")[0] if "-retry" in client_order_id else client_order_id
+            base_order_id = base_order_id.split("-R")[0] if "-R" in base_order_id else base_order_id
+
+            # Create compact retry ID that stays under 36 char limit
+            # Format: {base_id}-R{attempt} (e.g., HG1-LONG-01-1761018780259-24 -> HG1-LONG-01-1761018780259-R1)
+            new_client_order_id = f"{base_order_id}-R{new_attempt}"
+
+            # Validate length to prevent Binance rejection
+            if len(new_client_order_id) > 36:
+                # If still too long, truncate the timestamp portion
+                parts = base_order_id.split("-")
+                if len(parts) >= 4:
+                    # Shorten timestamp from 13 to 10 digits (millisecond precision instead of nanosecond)
+                    parts[3] = parts[3][:10]
+                    base_order_id = "-".join(parts)
+                    new_client_order_id = f"{base_order_id}-R{new_attempt}"
+
+            self.log.debug(
+                f"Generated retry order ID: {new_client_order_id} (length: {len(new_client_order_id)})"
+            )
+
+            new_intent = replace(
+                intent,
+                client_order_id=new_client_order_id,  # NEW ID for retry
+                price=adjusted_price,
+                retry_count=new_attempt,
+                original_price=intent.original_price or intent.price,
+                metadata={**intent.metadata, "retry_attempt": str(new_attempt)},
+            )
+
+            # Remove old order ID from pending retries, add new one
             del self._pending_retries[client_order_id]
-            self._retry_handler.clear_history(client_order_id)
-            return
+            self._pending_retries[new_client_order_id] = new_intent
 
-        # Adjust price for retry
-        new_attempt = intent.retry_count + 1
-        adjusted_price = self._retry_handler.adjust_price_for_retry(
-            original_price=intent.original_price or intent.price or 0.0,
-            side=intent.side or Side.LONG,
-            attempt=new_attempt,
-        )
+            self.log.info(
+                f"Retrying order (attempt {new_attempt}/"
+                f"{self._hedge_grid_config.execution.retry_attempts}): "  # type: ignore[union-attr]
+                f"old_id={client_order_id}, new_id={new_client_order_id}, "
+                f"adjusted price {intent.price} -> {adjusted_price}"
+            )
 
-        # Record this retry attempt
-        self._retry_handler.record_attempt(
-            client_order_id=client_order_id,
-            attempt=new_attempt,
-            original_price=intent.original_price or intent.price or 0.0,
-            adjusted_price=adjusted_price,
-            reason=rejection_reason,
-        )
+            # Submit retry (with delay if configured)
+            if self._hedge_grid_config.execution.retry_delay_ms > 0:  # type: ignore[union-attr]
+                # Schedule delayed retry using Nautilus clock
+                delay_ns = self._hedge_grid_config.execution.retry_delay_ms * 1_000_000  # type: ignore[union-attr]  # ms to ns
 
-        # Create new intent with adjusted price AND NEW CLIENT_ORDER_ID
-        # Note: We need to use dataclass.replace since OrderIntent is frozen
-        from dataclasses import replace
+                # Create callback that captures the intent
+                # Note: Nautilus clock.set_timer_ns expects a regular function, not async
+                def retry_callback() -> None:
+                    """Execute retry attempt for order."""
+                    self._execute_add(new_intent)
 
-        # Generate new unique order ID for retry
-        # Extract base order ID without any retry suffixes
-        base_order_id = client_order_id.split("-retry")[0] if "-retry" in client_order_id else client_order_id
-        base_order_id = base_order_id.split("-R")[0] if "-R" in base_order_id else base_order_id
+                # Use clock to schedule one-time callback
+                # Nautilus 1.220.0 requires set_time_alert_ns for one-time callbacks
+                alert_time_ns = self.clock.timestamp_ns() + delay_ns
 
-        # Create compact retry ID that stays under 36 char limit
-        # Format: {base_id}-R{attempt} (e.g., HG1-LONG-01-1761018780259-24 -> HG1-LONG-01-1761018780259-R1)
-        new_client_order_id = f"{base_order_id}-R{new_attempt}"
+                # Wrap callback to match TimeEvent signature expected by Nautilus
+                def timer_callback(event) -> None:
+                    """Execute retry attempt for order after delay."""
+                    self._execute_add(new_intent)
 
-        # Validate length to prevent Binance rejection
-        if len(new_client_order_id) > 36:
-            # If still too long, truncate the timestamp portion
-            parts = base_order_id.split("-")
-            if len(parts) >= 4:
-                # Shorten timestamp from 13 to 10 digits (millisecond precision instead of nanosecond)
-                parts[3] = parts[3][:10]
-                base_order_id = "-".join(parts)
-                new_client_order_id = f"{base_order_id}-R{new_attempt}"
-
-        self.log.debug(
-            f"Generated retry order ID: {new_client_order_id} (length: {len(new_client_order_id)})"
-        )
-
-        new_intent = replace(
-            intent,
-            client_order_id=new_client_order_id,  # NEW ID for retry
-            price=adjusted_price,
-            retry_count=new_attempt,
-            original_price=intent.original_price or intent.price,
-            metadata={**intent.metadata, "retry_attempt": str(new_attempt)},
-        )
-
-        # Remove old order ID from pending retries, add new one
-        del self._pending_retries[client_order_id]
-        self._pending_retries[new_client_order_id] = new_intent
-
-        self.log.info(
-            f"Retrying order (attempt {new_attempt}/"
-            f"{self._hedge_grid_config.execution.retry_attempts}): "  # type: ignore[union-attr]
-            f"old_id={client_order_id}, new_id={new_client_order_id}, "
-            f"adjusted price {intent.price} -> {adjusted_price}"
-        )
-
-        # Submit retry (with delay if configured)
-        if self._hedge_grid_config.execution.retry_delay_ms > 0:  # type: ignore[union-attr]
-            # Schedule delayed retry using Nautilus clock
-            delay_ns = self._hedge_grid_config.execution.retry_delay_ms * 1_000_000  # type: ignore[union-attr]  # ms to ns
-
-            # Create callback that captures the intent
-            # Note: Nautilus clock.set_timer_ns expects a regular function, not async
-            def retry_callback() -> None:
-                """Execute retry attempt for order."""
+                self.clock.set_time_alert_ns(
+                    name=f"retry_{client_order_id}_{new_attempt}",
+                    alert_time_ns=alert_time_ns,
+                    callback=timer_callback,
+                )
+            else:
+                # Immediate retry
                 self._execute_add(new_intent)
 
-            # Use clock to schedule one-time callback
-            # Nautilus 1.220.0 requires set_time_alert_ns for one-time callbacks
-            alert_time_ns = self.clock.timestamp_ns() + delay_ns
-
-            # Wrap callback to match TimeEvent signature expected by Nautilus
-            def timer_callback(event) -> None:
-                """Execute retry attempt for order after delay."""
-                self._execute_add(new_intent)
-
-            self.clock.set_time_alert_ns(
-                name=f"retry_{client_order_id}_{new_attempt}",
-                alert_time_ns=alert_time_ns,
-                callback=timer_callback,
-            )
-        else:
-            # Immediate retry
-            self._execute_add(new_intent)
+        except Exception as e:
+            # Non-critical error handling
+            self.log.error(f"Error in on_order_rejected: {e}", exc_info=True)
+            # Continue processing - non-critical error
 
     def on_order_denied(self, event) -> None:
         """
@@ -1220,6 +1299,10 @@ class HedgeGridV1(Strategy):
             # Fallback: use even shorter format
             client_order_id_str = f"TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
+        # Round TP price to instrument tick size to prevent Binance -4014 error
+        if self._precision_guard:
+            tp_price = self._precision_guard.round_price(tp_price)
+
         order = self.order_factory.limit(
             instrument_id=self._instrument.id,
             order_side=order_side,
@@ -1281,6 +1364,10 @@ class HedgeGridV1(Strategy):
             # Fallback: use even shorter format
             client_order_id_str = f"SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
+        # Round SL price to instrument tick size for precision
+        if self._precision_guard:
+            sl_price = self._precision_guard.round_price(sl_price)
+
         order = self.order_factory.stop_market(
             instrument_id=self._instrument.id,
             order_side=order_side,
@@ -1323,45 +1410,18 @@ class HedgeGridV1(Strategy):
 
     def _get_live_grid_orders(self) -> list[LiveOrder]:
         """
-        Get live grid orders from cache.
+        Get live grid orders from internal cache (O(1) performance).
 
         Returns:
             List of LiveOrder objects for grid orders only (not TP/SL)
 
+        Note:
+            This method now uses an internal cache that is updated in real-time
+            via order event handlers (on_order_accepted, on_order_canceled, on_order_filled).
+            This provides O(1) performance instead of O(n) iteration through all orders.
         """
-        live_orders = []
-
-        # Query open orders from cache
-        open_orders = self.cache.orders_open(venue=self._venue)
-
-        for order in open_orders:
-            # Only include grid orders (not TP/SL)
-            if not order.client_order_id.value.startswith(self._strategy_name):
-                continue
-
-            # Skip TP/SL orders
-            if "-TP-" in order.client_order_id.value or "-SL-" in order.client_order_id.value:
-                continue
-
-            # Parse order metadata
-            try:
-                parsed = self._parse_cached_order_id(order.client_order_id.value)
-                side = parsed["side"]
-
-                # Create LiveOrder object
-                live_order = LiveOrder(
-                    client_order_id=order.client_order_id.value,
-                    side=side,  # type: ignore[arg-type]
-                    price=float(order.price) if hasattr(order, "price") else 0.0,
-                    qty=float(order.quantity),
-                    status="OPEN",
-                )
-                live_orders.append(live_order)
-            except (ValueError, KeyError) as e:
-                self.log.warning(f"Could not parse order {order.client_order_id}: {e}")
-                continue
-
-        return live_orders
+        with self._grid_orders_lock:
+            return list(self._grid_orders_cache.values())
 
     # =====================================================================
     # OPERATIONAL CONTROLS INTEGRATION
@@ -1480,22 +1540,25 @@ class HedgeGridV1(Strategy):
             Dictionary with current ladder state
 
         """
-        # Read ladder references (atomic) - no lock needed
-        if self._last_long_ladder is None and self._last_short_ladder is None:
-            return {"long_ladder": [], "short_ladder": [], "mid_price": 0.0}
+        # Use lock to ensure atomic read of multiple related state variables
+        with self._ladder_lock:
+            # Check if ladders are initialized
+            if self._last_long_ladder is None and self._last_short_ladder is None:
+                return {"long_ladder": [], "short_ladder": [], "mid_price": 0.0}
 
-        return {
-            "timestamp": self.clock.timestamp_ns(),
-            "mid_price": self._last_mid or 0.0,
-            "long_ladder": [
-                {"price": r.price, "qty": r.qty, "side": str(r.side)}
-                for r in (self._last_long_ladder.rungs if self._last_long_ladder else [])
-            ],
-            "short_ladder": [
-                {"price": r.price, "qty": r.qty, "side": str(r.side)}
-                for r in (self._last_short_ladder.rungs if self._last_short_ladder else [])
-            ],
-        }
+            # Create snapshot while holding lock to ensure consistency
+            return {
+                "timestamp": self.clock.timestamp_ns(),
+                "mid_price": self._last_mid or 0.0,
+                "long_ladder": [
+                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                    for r in (self._last_long_ladder.rungs if self._last_long_ladder else [])
+                ],
+                "short_ladder": [
+                    {"price": r.price, "qty": r.qty, "side": str(r.side)}
+                    for r in (self._last_short_ladder.rungs if self._last_short_ladder else [])
+                ],
+            }
 
     # =====================================================================
     # HELPER METHODS FOR OPERATIONAL METRICS
@@ -1700,3 +1763,195 @@ class HedgeGridV1(Strategy):
             }
 
         return None
+
+    # =====================================================================
+    # CRITICAL ERROR AND RISK MANAGEMENT METHODS
+    # =====================================================================
+
+    def _handle_critical_error(self) -> None:
+        """
+        Handle critical errors by entering safe mode.
+
+        This method is called when a critical error occurs that could
+        compromise trading safety. It cancels all orders and sets flags
+        to prevent further trading.
+        """
+        self.log.critical("CRITICAL ERROR - Entering safe mode")
+
+        # Set flags to stop trading
+        self._critical_error = True
+        self._pause_trading = True
+
+        # Cancel all pending orders
+        try:
+            # Cancel grid orders
+            for order in self.cache.orders_open(instrument_id=self.instrument_id):
+                self.cancel_order(order)
+                self.log.info(f"Cancelled order {order.client_order_id} due to critical error")
+        except Exception as e:
+            self.log.error(f"Failed to cancel orders during critical error handling: {e}")
+
+        # Log state for debugging
+        self.log.critical(
+            "Critical error handler complete. "
+            "Trading paused. Manual intervention required."
+        )
+
+    def _validate_order_size(self, order) -> bool:
+        """
+        Validate order size against account balance.
+
+        Args:
+            order: Order to validate
+
+        Returns:
+            True if order size is valid, False otherwise
+        """
+        try:
+            account = self.portfolio.account(self._venue)
+            if not account:
+                self.log.error("No account found for position validation")
+                return False
+
+            # Calculate notional value
+            notional = float(order.quantity) * float(order.price) if hasattr(order, 'price') else 0
+
+            # Get free balance (assuming USDT as base currency)
+            from nautilus_trader.model.identifiers import Currency
+            base_currency = Currency.from_str("USDT")
+            free_balance = float(account.balance_free(base_currency))
+
+            # Apply maximum position percentage (default 95%)
+            max_position_pct = getattr(self._hedge_grid_config, 'max_position_pct', 0.95) if self._hedge_grid_config else 0.95
+
+            if notional > free_balance * max_position_pct:
+                self.log.warning(
+                    f"Order notional {notional:.2f} exceeds limit "
+                    f"({free_balance:.2f} * {max_position_pct:.2%} = {free_balance * max_position_pct:.2f})"
+                )
+                return False
+
+            return True
+
+        except Exception as e:
+            self.log.error(f"Error validating order size: {e}")
+            return False  # Fail safe - reject if we can't validate
+
+    def _check_circuit_breaker(self) -> None:
+        """
+        Check if circuit breaker should activate based on error rate.
+
+        Monitors the error rate over a sliding window and activates
+        the circuit breaker if too many errors occur.
+        """
+        if self._circuit_breaker_active:
+            # Check if cooldown period has passed
+            if self._circuit_breaker_reset_time and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time:
+                self._circuit_breaker_active = False
+                self._circuit_breaker_reset_time = None
+                self.log.info("Circuit breaker reset - resuming normal operation")
+            return
+
+        # Track current error
+        now = self.clock.timestamp_ns()
+        self._error_window.append(now)
+
+        # Remove old errors outside 1-minute window
+        one_minute_ago = now - 60_000_000_000  # 60 seconds in nanoseconds
+        while self._error_window and self._error_window[0] < one_minute_ago:
+            self._error_window.popleft()
+
+        # Check threshold (default 10 errors per minute)
+        max_errors = getattr(self._hedge_grid_config, 'max_errors_per_minute', 10) if self._hedge_grid_config else 10
+
+        if len(self._error_window) >= max_errors:
+            self.log.critical(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
+            self._circuit_breaker_active = True
+
+            # Cancel all orders
+            for order in self.cache.orders_open(instrument_id=self.instrument_id):
+                self.cancel_order(order)
+
+            # Set reset time (5 minutes from now)
+            cooldown_seconds = getattr(self._hedge_grid_config, 'circuit_breaker_cooldown_seconds', 300) if self._hedge_grid_config else 300
+            self._circuit_breaker_reset_time = now + (cooldown_seconds * 1_000_000_000)
+
+            self.log.info(f"Circuit breaker will reset in {cooldown_seconds} seconds")
+
+    def _check_drawdown_limit(self) -> None:
+        """
+        Check and enforce maximum drawdown limit.
+
+        Monitors account balance and halts trading if drawdown
+        exceeds configured threshold.
+        """
+        try:
+            account = self.portfolio.account(self._venue)
+            if not account:
+                return
+
+            # Get current balance
+            from nautilus_trader.model.identifiers import Currency
+            base_currency = Currency.from_str("USDT")
+            current_balance = float(account.balance_total(base_currency))
+
+            # Initialize peak balance if needed
+            if self._initial_balance is None:
+                self._initial_balance = current_balance
+                self._peak_balance = current_balance
+                return
+
+            # Update peak balance
+            if current_balance > self._peak_balance:
+                self._peak_balance = current_balance
+
+            # Calculate drawdown percentage
+            if self._peak_balance > 0:
+                drawdown_pct = ((self._peak_balance - current_balance) / self._peak_balance) * 100
+
+                # Check against limit (default 20%)
+                max_drawdown_pct = getattr(self._hedge_grid_config, 'max_drawdown_pct', 20.0) if self._hedge_grid_config else 20.0
+
+                if drawdown_pct > max_drawdown_pct and not self._drawdown_protection_triggered:
+                    self.log.critical(
+                        f"Max drawdown exceeded: {drawdown_pct:.2f}% > {max_drawdown_pct:.2f}% "
+                        f"(peak: {self._peak_balance:.2f}, current: {current_balance:.2f})"
+                    )
+
+                    # Flatten all positions
+                    self._flatten_all_positions()
+
+                    # Set flags to prevent further trading
+                    self._drawdown_protection_triggered = True
+                    self._pause_trading = True
+
+        except Exception as e:
+            self.log.error(f"Error checking drawdown limit: {e}")
+
+    def _flatten_all_positions(self) -> None:
+        """
+        Emergency close all positions at market.
+
+        Used when critical risk thresholds are breached.
+        """
+        self.log.warning("EMERGENCY: Flattening all positions")
+
+        # Cancel all pending orders first
+        for order in self.cache.orders_open(instrument_id=self.instrument_id):
+            try:
+                self.cancel_order(order)
+                self.log.info(f"Cancelled order {order.client_order_id}")
+            except Exception as e:
+                self.log.error(f"Failed to cancel order {order.client_order_id}: {e}")
+
+        # Close LONG position
+        long_position_info = self._close_side_position("long")
+        if long_position_info:
+            self.log.info(f"Closing LONG position: {long_position_info}")
+
+        # Close SHORT position
+        short_position_info = self._close_side_position("short")
+        if short_position_info:
+            self.log.info(f"Closing SHORT position: {short_position_info}")
+
+        self.log.warning("All positions flattened")
