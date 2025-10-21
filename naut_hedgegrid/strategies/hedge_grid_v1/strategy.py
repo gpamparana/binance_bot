@@ -307,7 +307,11 @@ class HedgeGridV1(Strategy):
                 if venue_config is None or venue_config.api.testnet != self.config.testnet:
                     # Create minimal config dict matching VenueConfig schema
                     venue_config_dict = {
-                        "venue": "BINANCE",
+                        "venue": {
+                            "name": "BINANCE",
+                            "venue_type": "futures",
+                            "account_type": "PERPETUAL_LINEAR",
+                        },
                         "api": {
                             "api_key": api_key,
                             "api_secret": api_secret,
@@ -315,26 +319,27 @@ class HedgeGridV1(Strategy):
                         },
                         "trading": {
                             "hedge_mode": True,
-                            "position_mode": "Hedge",
                             "leverage": 1,
+                            "margin_type": "CROSSED",
                         },
                         "risk": {
-                            "max_position_size": 1.0,
-                            "max_order_size": 1.0,
-                            "max_daily_loss": 10000.0,
-                            "max_open_orders": 100,
+                            "max_leverage": 20,
+                            "min_order_size_usdt": 5.0,
+                            "max_order_size_usdt": 100000.0,
                         },
                         "precision": {
                             "price_precision": 2,
                             "quantity_precision": 3,
+                            "min_notional": 5.0,
                         },
                         "rate_limits": {
-                            "orders_per_second": 10,
+                            "orders_per_second": 5,
+                            "orders_per_minute": 100,
                             "weight_per_minute": 1200,
                         },
                         "websocket": {
-                            "heartbeat_interval": 30,
-                            "reconnect_delay": 5,
+                            "ping_interval": 30,
+                            "reconnect_timeout": 60,
                             "max_reconnect_attempts": 10,
                         },
                     }
