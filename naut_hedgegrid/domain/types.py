@@ -466,22 +466,25 @@ def parse_client_order_id(client_order_id: str) -> dict[str, str | int | Side]:
         client_order_id: Client order ID to parse
 
     Returns:
-        Dictionary with keys: strategy, side, level, timestamp
+        Dictionary with keys: strategy, side, level, timestamp, counter (optional)
 
     Raises:
         ValueError: If client order ID format is invalid
 
     """
-    EXPECTED_PARTS = 4  # noqa: N806
     parts = client_order_id.split("-")
-    if len(parts) != EXPECTED_PARTS:
+
+    # Support both old format (4 parts) and new format with counter (5+ parts)
+    if len(parts) < 4:
         msg = (
             f"Invalid client order ID format: {client_order_id}. "
-            f"Expected format: STRATEGY-SIDE-LEVEL-TIMESTAMP"
+            f"Expected format: STRATEGY-SIDE-LEVEL-TIMESTAMP or STRATEGY-SIDE-LEVEL-TIMESTAMP-COUNTER"
         )
         raise ValueError(msg)
 
-    strategy, side_str, level_str, timestamp_str = parts
+    strategy, side_str, level_str, timestamp_str = parts[0:4]
+    # If there are 5+ parts, the rest is the counter suffix (e.g., "retry1", "123")
+    counter_suffix = "-".join(parts[4:]) if len(parts) > 4 else None
 
     try:
         side = Side.from_string(side_str)
@@ -496,4 +499,5 @@ def parse_client_order_id(client_order_id: str) -> dict[str, str | int | Side]:
         "side": side,
         "level": level,
         "timestamp": timestamp,
+        "counter": counter_suffix,
     }

@@ -338,6 +338,98 @@ class BaseRunner(ABC):
             exec_engine=exec_engine_config,
         )
 
+    def _warmup_strategy(
+        self,
+        instrument_id: str,
+        venue_cfg: VenueConfig,
+        hedge_grid_cfg: HedgeGridConfig,
+    ) -> None:
+        """
+        Warm up strategy components with historical data.
+
+        This method fetches historical bar data from Binance and feeds it to the
+        strategy's regime detector to ensure it's warmed up before live trading starts.
+
+        Parameters
+        ----------
+        instrument_id : str
+            Instrument ID being traded (e.g., "BTCUSDT-PERP.BINANCE")
+        venue_cfg : VenueConfig
+            Venue configuration with API settings
+        hedge_grid_cfg : HedgeGridConfig
+            Hedge grid configuration with regime detector settings
+        """
+        self.console.print("[bold]Warming up strategy components...[/bold]")
+
+        try:
+            # Import here to avoid circular dependency
+            from naut_hedgegrid.warmup import BinanceDataWarmer
+
+            # Extract symbol from instrument ID (e.g., "BTCUSDT-PERP.BINANCE" -> "BTCUSDT")
+            symbol = instrument_id.split("-")[0]
+
+            # Calculate number of bars needed for warmup
+            # We need at least the slow EMA period + some buffer for ADX/ATR
+            slow_ema_period = hedge_grid_cfg.regime.ema_slow
+            warmup_bars = max(slow_ema_period + 20, 70)  # At least 70 bars for safety
+
+            # Create data warmer
+            with BinanceDataWarmer(venue_cfg, self.console) as warmer:
+                # Fetch historical bars for regime detector
+                self.console.print(
+                    f"[cyan]Fetching {warmup_bars} historical bars for {symbol}...[/cyan]"
+                )
+
+                historical_bars = warmer.fetch_detector_bars(
+                    symbol=symbol,
+                    num_bars=warmup_bars,
+                    interval="1m",  # 1-minute bars to match strategy
+                )
+
+                if historical_bars:
+                    self.console.print(
+                        f"[green]✓[/green] Fetched {len(historical_bars)} historical bars"
+                    )
+
+                    # Get strategy instance from node
+                    # The strategy should be the first one (and only one in our case)
+                    strategies = self.node.trader.strategies()
+                    if strategies:
+                        strategy = strategies[0]
+
+                        # Check if it's a HedgeGridV1 strategy with warmup capability
+                        if hasattr(strategy, "warmup_regime_detector"):
+                            strategy.warmup_regime_detector(historical_bars)
+                            self.console.print(
+                                "[green]✓[/green] Strategy regime detector warmed up"
+                            )
+                        else:
+                            self.console.print(
+                                "[yellow]⚠ Strategy does not support warmup[/yellow]"
+                            )
+                    else:
+                        self.console.print(
+                            "[yellow]⚠ No strategies found in trader[/yellow]"
+                        )
+                else:
+                    self.console.print(
+                        "[yellow]⚠ No historical bars fetched, starting cold[/yellow]"
+                    )
+
+        except ImportError as e:
+            self.console.print(
+                f"[yellow]⚠ Could not import warmup module: {e}[/yellow]\n"
+                "[yellow]Strategy will start without warmup[/yellow]"
+            )
+        except Exception as e:
+            # Don't fail the entire startup if warmup fails
+            self.console.print(
+                f"[yellow]⚠ Warmup failed: {e}[/yellow]\n"
+                "[yellow]Strategy will start without warmup[/yellow]"
+            )
+
+        self.console.print()
+
     def load_configs(
         self,
         strategy_config: str,
@@ -532,7 +624,16 @@ class BaseRunner(ABC):
                 self.node.build()
                 self.console.print("[green]✓[/green] Node built successfully")
 
+                # Start the node (this calls on_start() for strategies)
                 self.node.run()
+
+                # Warm up strategy components with historical data AFTER on_start()
+                # This ensures all components are initialized before warmup
+                self._warmup_strategy(
+                    instrument_id=instrument_id,
+                    venue_cfg=venue_cfg,
+                    hedge_grid_cfg=hedge_grid_cfg,
+                )
                 self.console.print("[green]✓[/green] Node started, waiting for bars...")
                 self.console.print()
 

@@ -1,0 +1,56 @@
+# Hedge Grid Strategy Configuration v1 - TESTNET VERSION
+# Optimized for Binance testnet with tighter grids to increase fill probability
+
+strategy:
+  name: hedge_grid_v1_testnet
+  instrument_id: BTCUSDT-PERP.BINANCE
+
+# Grid Parameters - TIGHTER SPACING FOR TESTNET
+grid:
+  grid_step_bps: 10.0  # Grid spacing in basis points (0.10%) - REDUCED from 25.0
+  grid_levels_long: 15  # Number of long grid levels below mid - INCREASED from 10
+  grid_levels_short: 15  # Number of short grid levels above mid - INCREASED from 10
+  base_qty: 0.001  # Base order quantity in BTC
+  qty_scale: 1.05  # Quantity multiplier per level - REDUCED from 1.1 for more even distribution
+
+# Take Profit / Stop Loss - TIGHTER FOR TESTING
+exit:
+  tp_steps: 1  # Take profit after 1 grid step - REDUCED from 2 for faster exits
+  sl_steps: 5  # Stop loss after 5 grid steps - REDUCED from 8
+
+# Grid Re-centering - MORE RESPONSIVE
+rebalance:
+  recenter_trigger_bps: 100.0  # Re-center grid if price moves 1.0% from mid - REDUCED from 150.0
+  max_inventory_quote: 5000.0  # Max inventory in quote currency - REDUCED for testnet safety
+
+# Order Execution
+execution:
+  maker_only: true
+  use_post_only_retries: true
+  retry_attempts: 3
+  retry_delay_ms: 100
+
+# Funding Rate Filter - RELAXED FOR TESTNET
+funding:
+  funding_window_minutes: 480  # 8-hour window for funding rate check
+  funding_max_cost_bps: 20.0  # Max acceptable funding cost - INCREASED from 10.0
+
+# Regime Detection Parameters - FASTER RESPONSE
+regime:
+  adx_len: 10  # ADX period for trend strength - REDUCED from 14
+  ema_fast: 9  # Fast EMA period - REDUCED from 12
+  ema_slow: 21  # Slow EMA period - REDUCED from 26
+  atr_len: 10  # ATR period for volatility - REDUCED from 14
+  hysteresis_bps: 25.0  # Hysteresis band for regime switching - REDUCED from 50.0
+
+# Position Sizing - CONSERVATIVE FOR TESTNET
+position:
+  max_position_size: 0.5  # Max position size in BTC - REDUCED from 1.0
+  max_leverage_used: 3.0  # Max effective leverage - REDUCED from 5.0
+  emergency_liquidation_buffer: 0.20  # Keep 20% buffer from liquidation - INCREASED from 0.15
+
+# Placement Policy (Inventory Biasing by Regime)
+policy:
+  strategy: throttled-counter  # core-and-scalp or throttled-counter
+  counter_levels: 8  # Number of counter-trend levels - INCREASED from 5
+  counter_qty_scale: 0.7  # Scale counter-trend quantities - INCREASED from 0.5

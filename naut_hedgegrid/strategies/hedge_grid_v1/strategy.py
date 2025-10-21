@@ -1,5 +1,6 @@
 """HedgeGridV1 trading strategy implementation."""
 
+import threading
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from functools import lru_cache
@@ -13,7 +14,13 @@ from nautilus_trader.model.enums import (
     TimeInForce,
     TriggerType,
 )
-from nautilus_trader.model.events import OrderAccepted, OrderCanceled, OrderFilled, OrderRejected
+from nautilus_trader.model.events import (
+    OrderAccepted,
+    OrderCanceled,
+    OrderDenied,
+    OrderFilled,
+    OrderRejected,
+)
 from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, PositionId, Venue
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price, Quantity
@@ -107,6 +114,14 @@ class HedgeGridV1(Strategy):
         self._last_bar_time: datetime | None = None
         self._total_fills: int = 0
         self._maker_fills: int = 0
+
+        # Order ID uniqueness counter (ensures no duplicate IDs)
+        self._order_id_counter: int = 0
+        self._order_id_lock = threading.Lock()  # Thread safety for counter
+
+        # Track fills to prevent duplicate TP/SL creation
+        self._fills_with_exits: set[str] = set()
+        self._fills_lock = threading.Lock()  # Thread safety for fills tracking
 
         # Ladder state for snapshot access
         self._last_long_ladder: Ladder | None = None
@@ -227,6 +242,58 @@ class HedgeGridV1(Strategy):
 
         self.log.info("HedgeGridV1 strategy started successfully")
 
+    def warmup_regime_detector(self, historical_bars: list[DetectorBar]) -> None:
+        """
+        Warm up the regime detector with historical bar data.
+
+        This method should be called before live trading starts to ensure the
+        regime detector has sufficient data to make reliable classifications.
+
+        Parameters
+        ----------
+        historical_bars : list[DetectorBar]
+            Historical bars ordered from oldest to newest
+        """
+        if self._regime_detector is None:
+            self.log.error("Cannot warmup: regime detector not initialized")
+            return
+
+        if not historical_bars:
+            self.log.warning("No historical bars provided for warmup")
+            return
+
+        self.log.info(f"Warming up regime detector with {len(historical_bars)} historical bars")
+
+        # Feed each bar to the regime detector
+        for i, bar in enumerate(historical_bars):
+            self._regime_detector.update_from_bar(bar)
+
+            # Log progress periodically
+            if (i + 1) % 10 == 0:
+                regime = self._regime_detector.current()
+                is_warm = self._regime_detector.is_warm
+                self.log.debug(
+                    f"Warmup progress: {i + 1}/{len(historical_bars)} bars, "
+                    f"regime={regime}, warm={is_warm}"
+                )
+
+        # Final status
+        final_regime = self._regime_detector.current()
+        is_warm = self._regime_detector.is_warm
+
+        if is_warm:
+            self.log.info(
+                f"✓ Regime detector warmup complete: current regime={final_regime}, "
+                f"EMA fast={self._regime_detector.ema_fast.value:.2f if self._regime_detector.ema_fast.value else 0:.2f}, "
+                f"EMA slow={self._regime_detector.ema_slow.value:.2f if self._regime_detector.ema_slow.value else 0:.2f}, "
+                f"ADX={self._regime_detector.adx.value:.2f if self._regime_detector.adx.value else 0:.2f}"
+            )
+        else:
+            self.log.warning(
+                f"⚠ Regime detector still not warm after {len(historical_bars)} bars. "
+                f"More historical data may be needed."
+            )
+
     def on_stop(self) -> None:
         """
         Stop the strategy.
@@ -330,7 +397,7 @@ class HedgeGridV1(Strategy):
 
         # Build ladders
         ladders = GridEngine.build_ladders(
-            mid=mid,
+            mid=self._grid_center,  # Use stable grid center, not current price
             cfg=self._hedge_grid_config,
             regime=regime,
         )
@@ -338,6 +405,13 @@ class HedgeGridV1(Strategy):
         self.log.info(
             f"Built {len(ladders)} ladder(s): "
             + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
+        )
+
+        # Log grid center vs current price for debugging
+        deviation_bps = abs(mid - self._grid_center) / self._grid_center * 10000
+        self.log.debug(
+            f"Grid center: {self._grid_center:.2f}, Current mid: {mid:.2f}, "
+            f"Deviation: {deviation_bps:.1f} bps"
         )
 
         # Store ladder state for snapshot access (before any filtering)
@@ -385,6 +459,13 @@ class HedgeGridV1(Strategy):
         # Execute diff operations
         self._execute_diff(diff_result)
 
+        # Diagnostic logging for fill monitoring (every 5 minutes)
+        if self.clock.timestamp_ns % 300_000_000_000 < 60_000_000_000:  # Within first minute of 5-min window
+            if not hasattr(self, '_last_diagnostic_log') or \
+               self.clock.timestamp_ns - self._last_diagnostic_log >= 300_000_000_000:
+                self._last_diagnostic_log = self.clock.timestamp_ns
+                self._log_diagnostic_status()
+
     def on_event(self, event: Event) -> None:
         """
         Handle generic events.
@@ -403,6 +484,8 @@ class HedgeGridV1(Strategy):
             self.on_order_canceled(event)
         elif isinstance(event, OrderRejected):
             self.on_order_rejected(event)
+        elif isinstance(event, OrderDenied):
+            self.on_order_denied(event)
 
     def on_order_filled(self, event: OrderFilled) -> None:
         """
@@ -419,7 +502,7 @@ class HedgeGridV1(Strategy):
             event: Order filled event
 
         """
-        self.log.info(f"Order filled: {event.client_order_id} @ {event.last_px}")
+        self.log.info(f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}")
 
         client_order_id = str(event.client_order_id.value)
 
@@ -452,6 +535,20 @@ class HedgeGridV1(Strategy):
         except (ValueError, KeyError) as e:
             self.log.warning(f"Could not parse client_order_id {event.client_order_id}: {e}")
             return
+
+        # Add null checks for parsed values
+        if side is None or level is None:
+            self.log.error(f"Parsed side or level is None for {event.client_order_id}")
+            return
+
+        # Thread-safe check and add for duplicate prevention
+        fill_key = f"{side.value}-{level}"
+        with self._fills_lock:
+            if fill_key in self._fills_with_exits:
+                self.log.debug(f"TP/SL already exist for {fill_key}, skipping creation")
+                return
+            # Immediately add to set to claim this fill (prevents race condition)
+            self._fills_with_exits.add(fill_key)
 
         # Calculate TP/SL prices based on grid configuration
         if self._hedge_grid_config is None or self._last_mid is None:
@@ -496,34 +593,66 @@ class HedgeGridV1(Strategy):
             sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
         self.log.info(
-            f"Creating TP/SL for {side} fill @ {fill_price:.2f}: "
-            f"TP={tp_price:.2f}, SL={sl_price:.2f}"
+            f"[TP/SL CREATION] Creating exit orders for {side} fill @ {fill_price:.2f}: "
+            f"TP={tp_price:.2f} ({self._hedge_grid_config.exit.tp_steps} steps), "
+            f"SL={sl_price:.2f} ({self._hedge_grid_config.exit.sl_steps} steps)"
         )
+
+        # Check instrument is available before creating orders
+        if self._instrument is None:
+            self.log.error("Cannot create TP/SL: instrument not initialized")
+            # Remove from tracking since we failed to create orders
+            with self._fills_lock:
+                self._fills_with_exits.discard(fill_key)
+            return
 
         # Create position_id with side suffix
         position_id = PositionId(f"{self.instrument_id}-{side.value}")
 
-        # Create TP limit order (reduce-only)
-        tp_order = self._create_tp_order(
-            side=side,
-            quantity=fill_qty,
-            tp_price=tp_price,
-            position_id=position_id,
-            level=level,  # type: ignore[arg-type]
-        )
+        try:
+            # Create TP limit order (reduce-only)
+            tp_order = self._create_tp_order(
+                side=side,
+                quantity=fill_qty,
+                tp_price=tp_price,
+                position_id=position_id,
+                level=level,  # type: ignore[arg-type]
+            )
 
-        # Create SL stop-market order (reduce-only)
-        sl_order = self._create_sl_order(
-            side=side,
-            quantity=fill_qty,
-            sl_price=sl_price,
-            position_id=position_id,
-            level=level,  # type: ignore[arg-type]
-        )
+            # Create SL stop-market order (reduce-only)
+            sl_order = self._create_sl_order(
+                side=side,
+                quantity=fill_qty,
+                sl_price=sl_price,
+                position_id=position_id,
+                level=level,  # type: ignore[arg-type]
+            )
 
-        # Submit orders
-        self.submit_order(tp_order, position_id=position_id)
-        self.submit_order(sl_order, position_id=position_id)
+            # Validate orders were created successfully
+            if tp_order is None or sl_order is None:
+                self.log.error(f"Failed to create TP or SL order for {fill_key}")
+                # Remove from tracking since we failed
+                with self._fills_lock:
+                    self._fills_with_exits.discard(fill_key)
+                return
+
+            # Submit orders
+            self.submit_order(tp_order, position_id=position_id)
+            self.submit_order(sl_order, position_id=position_id)
+
+            self.log.info(
+                f"[TP/SL SUBMITTED] Successfully submitted TP/SL orders for {fill_key}: "
+                f"TP ID={tp_order.client_order_id}, SL ID={sl_order.client_order_id}"
+            )
+
+            # Note: fill_key already added to _fills_with_exits above
+            
+        except Exception as e:
+            # On any failure, remove from set to allow retry
+            with self._fills_lock:
+                self._fills_with_exits.discard(fill_key)
+            self.log.error(f"Failed to create/submit TP/SL for {fill_key}: {e}", exc_info=True)
+            return
 
         self.log.info(f"Submitted TP/SL orders for level {level}")
 
@@ -551,9 +680,15 @@ class HedgeGridV1(Strategy):
             if self._retry_handler is not None:
                 self._retry_handler.clear_history(client_order_id)
 
-        # Log order acceptance
-        if event.client_order_id.value.startswith(self._strategy_name):
-            self.log.debug(f"Order accepted: {event.client_order_id}")
+        # Log order acceptance with detail for TP/SL orders
+        order_id = event.client_order_id.value
+        if order_id.startswith(self._strategy_name):
+            if "-TP-" in order_id:
+                self.log.info(f"[TP ACCEPTED] Take-profit order accepted: {event.client_order_id}")
+            elif "-SL-" in order_id:
+                self.log.info(f"[SL ACCEPTED] Stop-loss order accepted: {event.client_order_id}")
+            else:
+                self.log.debug(f"Grid order accepted: {event.client_order_id}")
 
     def on_order_canceled(self, event: OrderCanceled) -> None:
         """
@@ -587,7 +722,13 @@ class HedgeGridV1(Strategy):
         client_order_id = str(event.client_order_id.value)
         rejection_reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
 
-        self.log.warning(f"Order rejected: {client_order_id}, reason: {rejection_reason}")
+        # Enhanced logging for TP/SL rejections
+        if "-TP-" in client_order_id:
+            self.log.error(f"[TP REJECTED] Take-profit order rejected: {client_order_id}, reason: {rejection_reason}")
+        elif "-SL-" in client_order_id:
+            self.log.error(f"[SL REJECTED] Stop-loss order rejected: {client_order_id}, reason: {rejection_reason}")
+        else:
+            self.log.warning(f"Grid order rejected: {client_order_id}, reason: {rejection_reason}")
 
         # Check if retry handler is initialized
         if self._retry_handler is None or not self._retry_handler.enabled:
@@ -635,24 +776,32 @@ class HedgeGridV1(Strategy):
             reason=rejection_reason,
         )
 
-        # Create new intent with adjusted price
+        # Create new intent with adjusted price AND NEW CLIENT_ORDER_ID
         # Note: We need to use dataclass.replace since OrderIntent is frozen
         from dataclasses import replace
 
+        # Generate new unique order ID for retry (add counter suffix)
+        with self._order_id_lock:
+            self._order_id_counter += 1
+            new_client_order_id = f"{client_order_id}-retry{new_attempt}-{self._order_id_counter}"
+
         new_intent = replace(
             intent,
+            client_order_id=new_client_order_id,  # NEW ID for retry
             price=adjusted_price,
             retry_count=new_attempt,
             original_price=intent.original_price or intent.price,
             metadata={**intent.metadata, "retry_attempt": str(new_attempt)},
         )
 
-        # Update pending retries
-        self._pending_retries[client_order_id] = new_intent
+        # Remove old order ID from pending retries, add new one
+        del self._pending_retries[client_order_id]
+        self._pending_retries[new_client_order_id] = new_intent
 
         self.log.info(
-            f"Retrying {client_order_id} (attempt {new_attempt}/"
+            f"Retrying order (attempt {new_attempt}/"
             f"{self._hedge_grid_config.execution.retry_attempts}): "  # type: ignore[union-attr]
+            f"old_id={client_order_id}, new_id={new_client_order_id}, "
             f"adjusted price {intent.price} -> {adjusted_price}"
         )
 
@@ -667,15 +816,54 @@ class HedgeGridV1(Strategy):
                 """Execute retry attempt for order."""
                 self._execute_add(new_intent)
 
-            # Use clock to schedule callback
-            self.clock.set_timer_ns(
+            # Use clock to schedule one-time callback
+            # Nautilus 1.220.0 requires set_time_alert_ns for one-time callbacks
+            alert_time_ns = self.clock.timestamp_ns() + delay_ns
+
+            # Wrap callback to match TimeEvent signature expected by Nautilus
+            def timer_callback(event) -> None:
+                """Execute retry attempt for order after delay."""
+                self._execute_add(new_intent)
+
+            self.clock.set_time_alert_ns(
                 name=f"retry_{client_order_id}_{new_attempt}",
-                interval_ns=delay_ns,
-                callback=retry_callback,
+                alert_time_ns=alert_time_ns,
+                callback=timer_callback,
             )
         else:
             # Immediate retry
             self._execute_add(new_intent)
+
+    def on_order_denied(self, event) -> None:
+        """
+        Handle order denied event - clean up denied orders from retry tracking.
+
+        When an order is DENIED (usually due to duplicate order ID), we need to:
+        1. Remove it from pending retries to prevent infinite retry loops
+        2. Clear retry history
+        3. Log the error
+
+        Args:
+            event: OrderDenied event from NautilusTrader
+
+        """
+        client_order_id = str(event.client_order_id.value)
+        reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
+
+        # Enhanced logging for TP/SL denials
+        if "-TP-" in client_order_id:
+            self.log.error(f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}")
+        elif "-SL-" in client_order_id:
+            self.log.error(f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}")
+        else:
+            self.log.error(f"Grid order denied: {client_order_id}, reason: {reason}")
+
+        # Remove from pending retries (order ID is invalid, cannot retry)
+        if client_order_id in self._pending_retries:
+            del self._pending_retries[client_order_id]
+            if self._retry_handler is not None:
+                self._retry_handler.clear_history(client_order_id)
+            self.log.debug(f"Cleaned up denied order {client_order_id} from retry tracking")
 
     def _execute_diff(self, diff_result) -> None:
         """
@@ -764,7 +952,7 @@ class HedgeGridV1(Strategy):
             self.log.warning("Cannot create order: instrument or side missing")
             return
 
-        # Create limit order
+        # Create limit order (this appends counter to client_order_id)
         order = self._create_limit_order(intent, self._instrument)
 
         # Create position_id with side suffix
@@ -772,11 +960,15 @@ class HedgeGridV1(Strategy):
 
         # Submit order
         self.submit_order(order, position_id=position_id)
-        self.log.debug(f"Created order: {intent.client_order_id} @ {intent.price}")
 
-        # Track order for potential retry (only first attempt or retries with updated intent)
+        # Get the actual order ID (which includes the counter suffix)
+        actual_order_id = str(order.client_order_id.value)
+        self.log.debug(f"Created order: {actual_order_id} @ {intent.price}")
+
+        # Track order for potential retry using the ACTUAL order ID
+        # Note: We need to use the actual ID since events will reference it
         if self._retry_handler is not None and self._retry_handler.enabled:
-            self._pending_retries[intent.client_order_id] = intent
+            self._pending_retries[actual_order_id] = intent
 
     def _create_limit_order(self, intent: OrderIntent, instrument: Instrument) -> LimitOrder:
         """
@@ -793,6 +985,12 @@ class HedgeGridV1(Strategy):
         # Convert side
         order_side = OrderSide.BUY if intent.side == Side.LONG else OrderSide.SELL
 
+        # Generate unique client_order_id by appending counter
+        # This ensures grid orders have unique IDs even if created at same timestamp
+        with self._order_id_lock:
+            self._order_id_counter += 1
+            unique_client_order_id = f"{intent.client_order_id}-{self._order_id_counter}"
+
         # Create order
         order = self.order_factory.limit(
             instrument_id=instrument.id,
@@ -801,7 +999,7 @@ class HedgeGridV1(Strategy):
             price=Price(intent.price, precision=instrument.price_precision),
             time_in_force=TimeInForce.GTC,
             post_only=True,  # Maker-only orders
-            client_order_id=ClientOrderId(intent.client_order_id),
+            client_order_id=ClientOrderId(unique_client_order_id),
         )
 
         return order
@@ -834,10 +1032,26 @@ class HedgeGridV1(Strategy):
         # TP order is opposite side (close position)
         order_side = OrderSide.SELL if side == Side.LONG else OrderSide.BUY
 
-        # Generate client_order_id for TP
-        client_order_id_str = (
-            f"{self._strategy_name}-TP-{side.value}-{level:02d}-{self.clock.timestamp_ns()}"
-        )
+        # Generate unique client_order_id for TP with counter
+        # IMPORTANT: Binance limits order IDs to 36 characters
+        with self._order_id_lock:
+            self._order_id_counter += 1
+            counter = self._order_id_counter
+
+        # Use millisecond timestamp (13 chars) instead of nanosecond (19 chars)
+        timestamp_ms = self.clock.timestamp_ns() // 1_000_000
+
+        # Shorten side name: LONG->L, SHORT->S
+        side_abbr = "L" if side == Side.LONG else "S"
+
+        # Format: HG1-TP-L01-1234567890123-1 (max ~30 chars)
+        client_order_id_str = f"{self._strategy_name}-TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+
+        # Validate length (Binance limit is 36 chars)
+        if len(client_order_id_str) > 36:
+            self.log.error(f"TP order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
+            # Fallback: use even shorter format
+            client_order_id_str = f"TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
         order = self.order_factory.limit(
             instrument_id=self._instrument.id,
@@ -879,10 +1093,26 @@ class HedgeGridV1(Strategy):
         # SL order is opposite side (close position)
         order_side = OrderSide.SELL if side == Side.LONG else OrderSide.BUY
 
-        # Generate client_order_id for SL
-        client_order_id_str = (
-            f"{self._strategy_name}-SL-{side.value}-{level:02d}-{self.clock.timestamp_ns()}"
-        )
+        # Generate unique client_order_id for SL with counter
+        # IMPORTANT: Binance limits order IDs to 36 characters
+        with self._order_id_lock:
+            self._order_id_counter += 1
+            counter = self._order_id_counter
+
+        # Use millisecond timestamp (13 chars) instead of nanosecond (19 chars)
+        timestamp_ms = self.clock.timestamp_ns() // 1_000_000
+
+        # Shorten side name: LONG->L, SHORT->S
+        side_abbr = "L" if side == Side.LONG else "S"
+
+        # Format: HG1-SL-L01-1234567890123-1 (max ~30 chars)
+        client_order_id_str = f"{self._strategy_name}-SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+
+        # Validate length (Binance limit is 36 chars)
+        if len(client_order_id_str) > 36:
+            self.log.error(f"SL order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
+            # Fallback: use even shorter format
+            client_order_id_str = f"SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
         order = self.order_factory.stop_market(
             instrument_id=self._instrument.id,
@@ -1004,9 +1234,7 @@ class HedgeGridV1(Strategy):
             "total_pnl_usdt": self._get_total_pnl(),
             # System health
             "uptime_seconds": self._get_uptime_seconds(),
-            "last_bar_timestamp": (
-                self._last_bar_time.timestamp() if self._last_bar_time else 0.0
-            ),
+            "last_bar_timestamp": (self._last_bar_time.timestamp() if self._last_bar_time else 0.0),
         }
 
     def attach_kill_switch(self, kill_switch) -> None:
@@ -1222,6 +1450,36 @@ class HedgeGridV1(Strategy):
             return 0.0
 
         return (self.clock.timestamp_ns() - self._start_time) / 1e9
+
+    def _log_diagnostic_status(self) -> None:
+        """Log diagnostic information about fills and TP/SL attachments."""
+        # Count open positions
+        long_position_id = PositionId(f"{self.instrument_id}-LONG")
+        short_position_id = PositionId(f"{self.instrument_id}-SHORT")
+        long_pos = self.cache.position(long_position_id)
+        short_pos = self.cache.position(short_position_id)
+
+        long_qty = float(long_pos.quantity) if long_pos and not long_pos.is_flat() else 0.0
+        short_qty = float(short_pos.quantity) if short_pos and not short_pos.is_flat() else 0.0
+
+        # Count TP/SL orders
+        tp_orders = 0
+        sl_orders = 0
+        for order in self.cache.orders_open(venue=self._venue):
+            order_id = order.client_order_id.value
+            if "-TP-" in order_id:
+                tp_orders += 1
+            elif "-SL-" in order_id:
+                sl_orders += 1
+
+        # Log comprehensive status
+        self.log.info(
+            f"[DIAGNOSTIC] Fills: {self._total_fills} total ({len(self._fills_with_exits)} with TP/SL), "
+            f"Positions: LONG={long_qty:.3f} BTC, SHORT={short_qty:.3f} BTC, "
+            f"Exit Orders: {tp_orders} TPs, {sl_orders} SLs, "
+            f"Grid Orders: {len(self._get_live_grid_orders())} active, "
+            f"Last Mid: {self._last_mid:.2f}"
+        )
 
     def _cancel_side_orders(self, side: str) -> int:
         """Cancel all orders for given side."""

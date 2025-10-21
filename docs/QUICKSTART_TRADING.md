@@ -717,7 +717,9 @@ export BINANCE_API_SECRET=testnet_api_secret_here
 ```bash
 uv run python -m naut_hedgegrid live \
     --strategy-config configs/strategies/hedge_grid_v1.yaml \
-    --venue-config configs/venues/binance_testnet.yaml
+    --venue-config configs/venues/binance_testnet.yaml \
+    2>&1 | tee reports/live_logs_testnet.log
+
 ```
 
 Output will show `Testnet: Yes` in the status panel.
