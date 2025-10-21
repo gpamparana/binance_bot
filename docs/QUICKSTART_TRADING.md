@@ -1,9 +1,9 @@
 # Quick Start Guide - Trading with NautilusTrader
 
 uv run python -m naut_hedgegrid live \
---strategy-config configs/strategies/hedge_grid_v1.yaml \
---venue-config configs/venues/binance_futures_testnet.yaml \
-2>&1 | tee reports/live_logs_testnet.log
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --venue-config configs/venues/binance_futures_testnet.yaml \
+    2>&1 | tee reports/live_logs_testnet.log
 
 This guide covers paper trading, live trading, and backtesting with the HedgeGridV1 strategy.
 
