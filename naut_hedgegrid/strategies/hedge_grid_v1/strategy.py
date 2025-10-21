@@ -260,8 +260,9 @@ class HedgeGridV1(Strategy):
                 return
 
             # Skip warmup in backtests as they have their own data
-            # Backtests are detected by checking if we're in the BacktestEngine
-            if self.clock.is_test_clock():
+            # Backtests are detected by checking the clock type
+            # TestClock is used in backtests, LiveClock in live/paper trading
+            if hasattr(self.clock, '__class__') and 'Test' in self.clock.__class__.__name__:
                 self.log.debug("Skipping warmup in backtest mode")
                 return
 
@@ -366,12 +367,19 @@ class HedgeGridV1(Strategy):
         is_warm = self._regime_detector.is_warm
 
         if is_warm:
-            self.log.info(
-                f"✓ Regime detector warmup complete: current regime={final_regime}, "
-                f"EMA fast={self._regime_detector.ema_fast.value:.2f if self._regime_detector.ema_fast.value else 0:.2f}, "
-                f"EMA slow={self._regime_detector.ema_slow.value:.2f if self._regime_detector.ema_slow.value else 0:.2f}, "
-                f"ADX={self._regime_detector.adx.value:.2f if self._regime_detector.adx.value else 0:.2f}"
-            )
+            try:
+                ema_fast_val = self._regime_detector.ema_fast.value if self._regime_detector.ema_fast.value else 0
+                ema_slow_val = self._regime_detector.ema_slow.value if self._regime_detector.ema_slow.value else 0
+                adx_val = self._regime_detector.adx.value if self._regime_detector.adx.value else 0
+                self.log.info(
+                    f"✓ Regime detector warmup complete: current regime={final_regime}, "
+                    f"EMA fast={ema_fast_val:.2f}, "
+                    f"EMA slow={ema_slow_val:.2f}, "
+                    f"ADX={adx_val:.2f}"
+                )
+            except Exception as e:
+                # Simpler logging if there's an issue
+                self.log.info(f"✓ Regime detector warmup complete: current regime={final_regime}")
         else:
             self.log.warning(
                 f"⚠ Regime detector still not warm after {len(historical_bars)} bars. "
@@ -458,10 +466,15 @@ class HedgeGridV1(Strategy):
         self._regime_detector.update_from_bar(detector_bar)
         regime = self._regime_detector.current()
 
-        # Log regime and price
-        self.log.info(
-            f"Bar: close={mid:.2f}, regime={regime}, warm={self._regime_detector.is_warm}"
-        )
+        # Log regime and price with error handling
+        try:
+            warm_status = self._regime_detector.is_warm
+            self.log.info(
+                f"Bar: close={mid:.2f}, regime={regime}, warm={warm_status}"
+            )
+        except Exception as e:
+            # Fallback logging if there's an issue with property access
+            self.log.warning(f"Error logging bar info: {e}. Bar close={mid:.2f}")
 
         # Check if detector is warm enough for trading
         if not self._regime_detector.is_warm:
