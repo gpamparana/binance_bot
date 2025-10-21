@@ -240,7 +240,91 @@ class HedgeGridV1(Strategy):
         self._maker_fills = 0
         self.log.info("Metrics tracking initialized")
 
+        # Perform warmup if configured
+        # The warmup will fetch historical data and pre-warm the regime detector
+        self._perform_warmup()
+
         self.log.info("HedgeGridV1 strategy started successfully")
+
+    def _perform_warmup(self) -> None:
+        """
+        Perform strategy warmup by fetching historical data.
+
+        This method fetches historical bars from Binance and uses them to
+        pre-warm the regime detector, avoiding the need to wait for live bars.
+        """
+        try:
+            # Check if warmup is enabled in config
+            if not self.config.enable_warmup:
+                self.log.info("Warmup disabled in config")
+                return
+
+            # Skip warmup in backtests as they have their own data
+            # Backtests are detected by checking if we're in the BacktestEngine
+            if self.clock.is_test_clock():
+                self.log.debug("Skipping warmup in backtest mode")
+                return
+
+            # Try to import the warmup module
+            try:
+                from naut_hedgegrid.warmup import BinanceDataWarmer
+                from naut_hedgegrid.config.venue import VenueConfig
+            except ImportError as e:
+                self.log.warning(f"Warmup module not available: {e}, starting without warmup")
+                return
+
+            # Get API credentials from environment
+            import os
+            api_key = os.environ.get('BINANCE_API_KEY', '')
+            api_secret = os.environ.get('BINANCE_API_SECRET', '')
+
+            if not api_key or not api_secret:
+                self.log.warning("No Binance API credentials found, skipping warmup")
+                return
+
+            # Create minimal venue config for warmup
+            # We only need API access to fetch historical data
+            venue_config = VenueConfig(
+                api=type('ApiConfig', (), {
+                    'testnet': self.config.testnet,
+                    'api_key': api_key,
+                    'api_secret': api_secret,
+                })(),
+                trading=type('TradingConfig', (), {
+                    'hedge_mode': True,
+                    'position_mode': 'Hedge',
+                    'leverage': 1,
+                })(),
+            )
+
+            # Extract symbol from instrument ID
+            symbol = str(self.instrument_id).split("-")[0]
+
+            # Calculate bars needed for warmup
+            regime_cfg = self._hedge_grid_config.regime
+            warmup_bars = max(regime_cfg.ema_slow + 20, 70)
+
+            self.log.info(
+                f"Starting warmup: fetching {warmup_bars} historical bars for {symbol} "
+                f"(testnet={self.config.testnet})"
+            )
+
+            # Fetch historical data
+            with BinanceDataWarmer(venue_config) as warmer:
+                historical_bars = warmer.fetch_detector_bars(
+                    symbol=symbol,
+                    num_bars=warmup_bars,
+                    interval="1m",
+                )
+
+                if historical_bars:
+                    self.log.info(f"✓ Fetched {len(historical_bars)} historical bars")
+                    self.warmup_regime_detector(historical_bars)
+                else:
+                    self.log.warning("No historical bars fetched, starting without warmup")
+
+        except Exception as e:
+            self.log.warning(f"Warmup failed: {e}. Starting without warmup.")
 
     def warmup_regime_detector(self, historical_bars: list[DetectorBar]) -> None:
         """
