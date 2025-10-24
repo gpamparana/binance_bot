@@ -6,8 +6,8 @@ backtest:
 
 # Time Range
 time_range:
-  start_time: "2025-01-01T00:00:00Z"
-  end_time: "2025-07-01T00:00:00Z"  # 7 days for enough trades
+  start_time: "2024-01-01T00:00:00Z"
+  end_time: "2024-07-01T00:00:00Z"  # 6 months for robust optimization
   timezone: UTC
 
 # Data Configuration

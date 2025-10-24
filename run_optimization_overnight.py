@@ -25,15 +25,16 @@ def main():
     backtest_config = Path("configs/backtest/btcusdt_mark_trades_funding.yaml")
     strategy_config = Path("configs/strategies/final_working_test_best.yaml")
 
-    # Relax constraints for initial optimization
+    # Very relaxed constraints for initial optimization
+    # This allows us to see which parameter sets produce ANY trades
     # After we have some good results, we can tighten these
     constraints = ConstraintThresholds(
-        min_sharpe_ratio=0.5,    # Relaxed for initial testing
-        max_drawdown_pct=30.0,   # Relaxed for initial testing
-        min_trades=5,            # Very relaxed - just need some trades
-        min_win_rate_pct=30.0,   # Relaxed for initial testing
-        min_profit_factor=0.8,   # Relaxed for initial testing
-        min_calmar_ratio=0.1     # Relaxed for initial testing
+        min_sharpe_ratio=0.0,    # Accept any sharpe (even negative)
+        max_drawdown_pct=100.0,  # Accept any drawdown
+        min_trades=1,            # Just need at least 1 trade
+        min_win_rate_pct=0.0,    # Accept any win rate
+        min_profit_factor=0.0,   # Accept any profit factor
+        min_calmar_ratio=0.0     # Accept any calmar
     )
 
     # Initialize optimizer with more trials
