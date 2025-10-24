@@ -430,15 +430,43 @@ class StrategyOptimizer:
                 try:
                     portfolio = engine.portfolio
 
-                    # Try to get positions count
-                    total_trades = 0
-                    winning_trades = 0
-                    total_win = 0.0
-                    total_loss = 0.0
-
+                    # Get actual portfolio statistics
                     try:
+                        stats = portfolio.statistics()
+
+                        # Extract real metrics from Nautilus statistics
+                        total_pnl = stats.get("PnL (total)", 0.0)
+                        if isinstance(total_pnl, str):
+                            # Parse string like "-13_224.875072910001"
+                            total_pnl = float(total_pnl.replace('_', ''))
+
+                        total_return_pct = stats.get("PnL% (total)", 0.0)
+                        if isinstance(total_return_pct, str):
+                            total_return_pct = float(total_return_pct.replace('_', ''))
+
+                        sharpe = stats.get("Sharpe Ratio (252 days)", 0.0)
+                        if isinstance(sharpe, str):
+                            sharpe = float(sharpe.replace('_', ''))
+
+                        profit_factor = stats.get("Profit Factor", 0.0)
+                        if isinstance(profit_factor, str):
+                            profit_factor = float(profit_factor.replace('_', ''))
+
+                        win_rate = stats.get("Win Rate", 0.0)
+                        if isinstance(win_rate, str):
+                            win_rate = float(win_rate.replace('_', '')) * 100  # Convert to percentage
+
+                        max_drawdown = abs(stats.get("Max Drawdown (%)", 20.0))
+                        if isinstance(max_drawdown, str):
+                            max_drawdown = float(max_drawdown.replace('_', ''))
+
+                        # Get trade counts from positions
                         positions = engine.cache.positions_closed()
                         total_trades = len(positions)
+
+                        winning_trades = 0
+                        total_win = 0.0
+                        total_loss = 0.0
 
                         for pos in positions:
                             if hasattr(pos, 'realized_pnl') and pos.realized_pnl:
@@ -448,33 +476,41 @@ class StrategyOptimizer:
                                     total_win += pnl
                                 elif pnl < 0:
                                     total_loss += abs(pnl)
-                    except:
-                        pass
 
-                    # Calculate basic metrics
-                    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-                    profit_factor = (total_win / total_loss) if total_loss > 0 else 1.0
-                    total_pnl = total_win - total_loss
+                        # Calmar = return / max drawdown
+                        calmar = abs(total_return_pct / max_drawdown) if max_drawdown > 0 else 0
 
-                    # Try to get drawdown from portfolio
-                    max_drawdown = 20.0  # Default conservative estimate
-                    try:
-                        stats = portfolio.statistics()
-                        max_drawdown = abs(stats.get("Max Drawdown (%)", 20.0))
-                    except:
-                        pass
+                    except Exception as e:
+                        # Fallback to simple calculation
+                        logging.warning(f"Failed to extract portfolio stats: {e}")
+                        positions = engine.cache.positions_closed()
+                        total_trades = len(positions)
+                        winning_trades = 0
+                        total_win = 0.0
+                        total_loss = 0.0
 
-                    # Calculate simple Sharpe approximation (will be 0 if no trades)
-                    sharpe = (total_pnl / 10000.0) * 16 if total_trades > 10 else 0.0  # Very rough estimate
+                        for pos in positions:
+                            if hasattr(pos, 'realized_pnl') and pos.realized_pnl:
+                                pnl = float(pos.realized_pnl.as_double())
+                                if pnl > 0:
+                                    winning_trades += 1
+                                    total_win += pnl
+                                elif pnl < 0:
+                                    total_loss += abs(pnl)
 
-                    # Calmar = return / max drawdown
-                    calmar = abs((total_pnl / 10000.0 * 100) / max_drawdown) if max_drawdown > 0 else 0
+                        total_pnl = total_win - total_loss
+                        total_return_pct = (total_pnl / 10000.0) * 100
+                        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+                        profit_factor = (total_win / total_loss) if total_loss > 0 else 0.0
+                        sharpe = (total_pnl / 10000.0) * 16 if total_trades > 10 else 0.0
+                        max_drawdown = 20.0
+                        calmar = abs(total_return_pct / max_drawdown) if max_drawdown > 0 else 0
 
-                    # Create metrics object with basic values
+                    # Create metrics object with extracted values
                     metrics = PerformanceMetrics(
                         # Returns
                         total_pnl=total_pnl,
-                        total_return_pct=(total_pnl / 10000.0) * 100,
+                        total_return_pct=total_return_pct,
                         annualized_return_pct=0.0,
 
                         # Risk metrics
