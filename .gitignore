@@ -211,3 +211,4 @@ __marimo__/
 *.log
 summary.json
 config.json
+optimization_results.db

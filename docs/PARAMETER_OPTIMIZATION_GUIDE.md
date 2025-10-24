@@ -222,35 +222,63 @@ uv run python -m naut_hedgegrid.optimization.cli optimize \
       
 ### Expected Output
 
+The optimizer now provides **clean, readable output** with minimal noise:
+
 ```
-╔══════════════════════════════════════════════════════════╗
-║         Strategy Parameter Optimization                   ║
-╚══════════════════════════════════════════════════════════╝
+═══════════════════════════════════════════
+     Parameter Optimization Started
+═══════════════════════════════════════════
 
-Study: btcusdt_opt_v1
-Sampler: TPE (Bayesian Optimization)
-Trials: 100
-Workers: 4
+Study Name: hedge_grid_optimization_overnight
+Total Trials: 200
+Parallel Jobs: 4
+Backtest Config: configs/backtest/btcusdt_mark_trades_funding.yaml
+Base Strategy: configs/strategies/final_working_test_best.yaml
 
-[━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━] 100/100 100% 0:03:24
+✓ Base configurations loaded successfully
 
-✓ Optimization complete!
+⠋ Trial 12/200 | Best: 1.8234 | Valid: 8/12 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6% 0:02:45 0:42:15
 
-Best Trial (#67):
-├── Score: 2.47
-├── Sharpe Ratio: 1.82
-├── Total Profit: $1,245.67
-├── Calmar Ratio: 2.34
-├── Max Drawdown: 8.5%
-├── Win Rate: 58.3%
-└── Trades: 234
+✓ NEW BEST Trial 12: Score=1.8234 | Sharpe=1.56 | PF=1.82 | DD=12.3% | Trades=145 | WR=62.1%
+✗ Trial 15: Invalid - min_sharpe_ratio (0.32 < 0.50), min_trades (3 < 5)
 
-Best parameters saved to:
-configs/strategies/btcusdt_opt_v1_best.yaml
+... (only shows new bests, errors, and constraint violations)
 
-Results database:
-artifacts/optimization/btcusdt_opt_v1/study.db
+═══════════════════════════════════════════
+     Optimization Complete! 🎉
+═══════════════════════════════════════════
+
+Best Trial: #142
+Best Score: 2.1567
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ 🏆 Optimized Parameters  ┃           ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ base_qty                 │    0.0150 │
+│ grid_step_bps            │   45.2000 │
+│ grid_levels_long         │   12.0000 │
+│ grid_levels_short        │   14.0000 │
+│ qty_scale                │    1.2500 │
+│ tp_steps                 │    3.0000 │
+│ sl_steps                 │    6.0000 │
+└──────────────────────────┴───────────┘
+
+Study Statistics:
+  Total Trials       200
+  Valid Trials       156
+  Validity Rate      78.0%
+  Best Score         2.1567
+  Average Score      1.2341
+
+✓ Best parameters saved to: configs/strategies/hedge_grid_optimization_overnight_best.yaml
 ```
+
+**Key Features:**
+- **Progress bar** with real-time stats (current trial, best score, valid ratio)
+- **Suppressed backtest logs** - only shows errors or higher severity
+- **Compact trial output** - only logs new best scores, failures, or constraint violations
+- **Clean final summary** with optimized parameters table
+- **Rich formatting** with colors and emojis for better readability
 
 ## System Architecture
 

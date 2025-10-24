@@ -15,6 +15,7 @@ import yaml
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
 from nautilus_trader.model.enums import OmsType
@@ -139,6 +140,11 @@ class StrategyOptimizer:
         # Optuna storage
         self.storage = storage
 
+        # Progress tracking
+        self.best_score = float("-inf")
+        self.valid_trials = 0
+        self.total_trials_run = 0
+
         # Load and validate base configs
         self._validate_base_configs()
 
@@ -167,12 +173,14 @@ class StrategyOptimizer:
             Completed Optuna study with results
         """
         if self.verbose and self.console:
-            self.console.print("\n[bold cyan]Starting Parameter Optimization[/bold cyan]")
-            self.console.print(f"Study Name: {self.study_name}")
-            self.console.print(f"Trials: {self.n_trials}")
-            self.console.print(f"Parallel Jobs: {self.n_jobs}")
-            self.console.print(f"Backtest Config: {self.backtest_config_path}")
-            self.console.print(f"Base Strategy Config: {self.base_strategy_config_path}\n")
+            self.console.print("\n[bold cyan]═══════════════════════════════════════════[/bold cyan]")
+            self.console.print("[bold cyan]     Parameter Optimization Started[/bold cyan]")
+            self.console.print("[bold cyan]═══════════════════════════════════════════[/bold cyan]\n")
+            self.console.print(f"[dim]Study Name:[/dim] {self.study_name}")
+            self.console.print(f"[dim]Total Trials:[/dim] {self.n_trials}")
+            self.console.print(f"[dim]Parallel Jobs:[/dim] {self.n_jobs}")
+            self.console.print(f"[dim]Backtest Config:[/dim] {self.backtest_config_path}")
+            self.console.print(f"[dim]Base Strategy:[/dim] {self.base_strategy_config_path}\n")
 
         # Create Optuna study
         study = optuna.create_study(
@@ -183,6 +191,9 @@ class StrategyOptimizer:
             storage=self.storage,
             load_if_exists=True
         )
+
+        # Suppress Optuna's default logging
+        optuna.logging.set_verbosity(optuna.logging.ERROR)
 
         # Define objective function wrapper
         def objective(trial: optuna.Trial) -> float:
@@ -195,16 +206,22 @@ class StrategyOptimizer:
 
                 # Validate parameters
                 if not self.param_space.validate_parameters(parameters):
-                    if self.verbose and self.console:
-                        self.console.print(f"[red]Trial {trial.number}: Invalid parameters[/red]")
                     return float("-inf")
 
-                # Run backtest with parameters
-                metrics = self._run_backtest_with_parameters(trial.number, parameters)
+                # Suppress logging during backtest (only show errors)
+                old_level = logging.root.level
+                logging.root.setLevel(logging.ERROR)
+
+                try:
+                    # Run backtest with parameters
+                    metrics = self._run_backtest_with_parameters(trial.number, parameters)
+                finally:
+                    # Restore logging level
+                    logging.root.setLevel(old_level)
 
                 if metrics is None:
                     if self.verbose and self.console:
-                        self.console.print(f"[red]Trial {trial.number}: Backtest failed[/red]")
+                        self.console.print(f"[red]✗ Trial {trial.number}: Backtest failed[/red]")
                     return float("-inf")
 
                 # Validate constraints
@@ -213,6 +230,13 @@ class StrategyOptimizer:
 
                 # Calculate multi-objective score
                 score = self.objective_func.calculate_score(metrics)
+
+                # Update tracking
+                self.total_trials_run += 1
+                if is_valid:
+                    self.valid_trials += 1
+                if score > self.best_score:
+                    self.best_score = score
 
                 # Save trial to database
                 trial_data = OptimizationTrial(
@@ -227,9 +251,9 @@ class StrategyOptimizer:
                 )
                 self.results_db.save_trial(trial_data)
 
-                # Log trial result
+                # Log trial result (only significant ones or invalid)
                 if self.verbose and self.console:
-                    self._log_trial_result(trial.number, metrics, score, is_valid, violations)
+                    self._log_trial_result_compact(trial.number, metrics, score, is_valid, violations)
 
                 return score
 
@@ -249,22 +273,54 @@ class StrategyOptimizer:
                 self.results_db.save_trial(trial_data)
 
                 if self.verbose and self.console:
-                    self.console.print(f"[red]Trial {trial.number} error: {e}[/red]")
+                    self.console.print(f"[red]✗ Trial {trial.number} ERROR: {str(e)[:80]}[/red]")
 
                 return float("-inf")
 
-        # Run optimization
+        # Run optimization with progress bar
         try:
-            study.optimize(
-                objective,
-                n_trials=self.n_trials,
-                n_jobs=1,  # Sequential execution (parallel backtests handled internally)
-                show_progress_bar=self.verbose
-            )
+            if self.verbose and self.console:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    console=self.console,
+                    transient=False
+                ) as progress:
+                    task = progress.add_task(
+                        f"[cyan]Optimizing ({self.n_trials} trials)",
+                        total=self.n_trials
+                    )
+
+                    def callback(study, trial):
+                        """Update progress bar after each trial."""
+                        progress.update(
+                            task,
+                            advance=1,
+                            description=f"[cyan]Trial {trial.number + 1}/{self.n_trials} | Best: {self.best_score:.4f} | Valid: {self.valid_trials}/{self.total_trials_run}"
+                        )
+
+                    study.optimize(
+                        objective,
+                        n_trials=self.n_trials,
+                        n_jobs=1,
+                        show_progress_bar=False,
+                        callbacks=[callback]
+                    )
+            else:
+                study.optimize(
+                    objective,
+                    n_trials=self.n_trials,
+                    n_jobs=1,
+                    show_progress_bar=False
+                )
 
         except KeyboardInterrupt:
             if self.verbose and self.console:
-                self.console.print("\n[yellow]Optimization interrupted by user[/yellow]")
+                self.console.print("\n[yellow]⚠ Optimization interrupted by user[/yellow]")
 
         # Show final results
         if self.verbose and self.console:
@@ -533,6 +589,42 @@ class StrategyOptimizer:
             "profit_factor": metrics.profit_factor,
         }
 
+    def _log_trial_result_compact(
+        self,
+        trial_number: int,
+        metrics: PerformanceMetrics,
+        score: float,
+        is_valid: bool,
+        violations: list[str]
+    ):
+        """Log trial result in compact format (only show important trials)."""
+        if not self.console:
+            return
+
+        # Only log if: invalid, has violations, or is a new best score
+        is_new_best = score >= self.best_score and is_valid
+        should_log = not is_valid or violations or is_new_best
+
+        if not should_log:
+            return
+
+        status = "[green]✓[/green]" if is_valid else "[red]✗[/red]"
+
+        if is_new_best:
+            self.console.print(
+                f"{status} [bold green]NEW BEST[/bold green] Trial {trial_number}: "
+                f"Score={score:.4f} | Sharpe={metrics.sharpe_ratio:.2f} | "
+                f"PF={metrics.profit_factor:.2f} | DD={metrics.max_drawdown_pct:.1f}% | "
+                f"Trades={metrics.total_trades} | WR={metrics.win_rate_pct:.1f}%"
+            )
+        elif not is_valid:
+            violation_str = ", ".join(violations[:2])  # Show first 2 violations
+            if len(violations) > 2:
+                violation_str += f" (+{len(violations) - 2} more)"
+            self.console.print(
+                f"{status} Trial {trial_number}: Invalid - {violation_str}"
+            )
+
     def _log_trial_result(
         self,
         trial_number: int,
@@ -541,7 +633,7 @@ class StrategyOptimizer:
         is_valid: bool,
         violations: list[str]
     ):
-        """Log trial result to console."""
+        """Log trial result to console (verbose mode)."""
         if not self.console:
             return
 
@@ -567,33 +659,46 @@ class StrategyOptimizer:
         if not self.console:
             return
 
-        self.console.print("\n[bold cyan]Optimization Complete![/bold cyan]\n")
+        self.console.print("\n[bold cyan]═══════════════════════════════════════════[/bold cyan]")
+        self.console.print("[bold cyan]     Optimization Complete! 🎉[/bold cyan]")
+        self.console.print("[bold cyan]═══════════════════════════════════════════[/bold cyan]\n")
 
         # Get best trial
         best_trial = study.best_trial
 
-        self.console.print(f"[bold]Best Trial: {best_trial.number}[/bold]")
-        self.console.print(f"Score: {best_trial.value:.4f}\n")
+        self.console.print(f"[bold green]Best Trial:[/bold green] #{best_trial.number}")
+        self.console.print(f"[bold green]Best Score:[/bold green] {best_trial.value:.4f}\n")
 
-        # Show best parameters
-        table = Table(title="Best Parameters")
-        table.add_column("Parameter", style="cyan")
-        table.add_column("Value", style="green")
+        # Show best parameters in a nice table
+        table = Table(title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta")
+        table.add_column("Parameter", style="cyan", no_wrap=True)
+        table.add_column("Value", style="green", justify="right")
 
-        for key, value in best_trial.params.items():
-            table.add_row(key, str(value))
+        for key, value in sorted(best_trial.params.items()):
+            if isinstance(value, float):
+                formatted_value = f"{value:.4f}"
+            else:
+                formatted_value = str(value)
+            table.add_row(key, formatted_value)
 
         self.console.print(table)
 
         # Show study statistics
         stats = self.results_db.get_study_stats(self.study_name)
         if stats and "error" not in stats:
-            self.console.print("\n[bold]Study Statistics:[/bold]")
-            self.console.print(f"  Total Trials: {stats['total_trials']}")
-            self.console.print(f"  Valid Trials: {stats['valid_trials']}")
-            self.console.print(f"  Validity Rate: {stats['validity_rate']:.1%}")
-            self.console.print(f"  Best Score: {stats['best_score']:.4f}")
-            self.console.print(f"  Avg Score: {stats['avg_score']:.4f}")
+            self.console.print("\n[bold cyan]Study Statistics:[/bold cyan]")
+
+            stats_table = Table(show_header=False, box=None, padding=(0, 2))
+            stats_table.add_column("Metric", style="dim")
+            stats_table.add_column("Value", style="bold")
+
+            stats_table.add_row("Total Trials", str(stats['total_trials']))
+            stats_table.add_row("Valid Trials", f"[green]{stats['valid_trials']}[/green]")
+            stats_table.add_row("Validity Rate", f"{stats['validity_rate']:.1%}")
+            stats_table.add_row("Best Score", f"[bold green]{stats['best_score']:.4f}[/bold green]")
+            stats_table.add_row("Average Score", f"{stats['avg_score']:.4f}")
+
+            self.console.print(stats_table)
 
     def _save_best_parameters(self, study: optuna.Study):
         """Save best parameters to YAML file."""
