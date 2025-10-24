@@ -208,16 +208,8 @@ class StrategyOptimizer:
                 if not self.param_space.validate_parameters(parameters):
                     return float("-inf")
 
-                # Suppress logging during backtest (only show errors)
-                old_level = logging.root.level
-                logging.root.setLevel(logging.ERROR)
-
-                try:
-                    # Run backtest with parameters
-                    metrics = self._run_backtest_with_parameters(trial.number, parameters)
-                finally:
-                    # Restore logging level
-                    logging.root.setLevel(old_level)
+                # Run backtest with parameters (logging suppression happens inside)
+                metrics = self._run_backtest_with_parameters(trial.number, parameters)
 
                 if metrics is None:
                     if self.verbose and self.console:
@@ -352,6 +344,15 @@ class StrategyOptimizer:
             Performance metrics if successful, None if failed
         """
         try:
+            # Temporarily suppress logging during backtest
+            # Save original backtest config logging settings
+            original_log_level = self.backtest_config.output.log_level
+            original_log_level_file = self.backtest_config.output.log_level_file
+
+            # Set to ERROR to suppress verbose output
+            self.backtest_config.output.log_level = "ERROR"
+            self.backtest_config.output.log_level_file = None  # Disable file logging
+
             # Create temporary strategy config with trial parameters
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -407,12 +408,18 @@ class StrategyOptimizer:
                 strategy_configs=[strategy_config]
             )
 
-            # Setup catalog and run backtest
-            catalog = runner.setup_catalog()
-            engine, data = runner.run(catalog)
+            try:
+                # Setup catalog and run backtest
+                catalog = runner.setup_catalog()
+                engine, data = runner.run(catalog)
 
-            # Clean up temporary config
-            temp_config_path.unlink(missing_ok=True)
+                # Clean up temporary config
+                temp_config_path.unlink(missing_ok=True)
+
+            finally:
+                # Restore original logging settings
+                self.backtest_config.output.log_level = original_log_level
+                self.backtest_config.output.log_level_file = original_log_level_file
 
             # Extract metrics
             if engine:
