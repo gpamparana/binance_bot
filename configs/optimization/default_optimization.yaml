@@ -1,0 +1,97 @@
+# Parameter Optimization Configuration
+# Configuration for Optuna-based Bayesian optimization of HedgeGridV1 strategy parameters
+
+# Study configuration
+study_name: "hedge_grid_optimization"
+n_trials: 100  # Number of parameter combinations to test
+n_jobs: 4  # Number of parallel workers (recommend: CPU count - 1)
+timeout_minutes: 480  # 8 hours max total optimization time
+
+# Optuna sampler settings
+sampler:
+  type: "TPE"  # Tree-structured Parzen Estimator (Bayesian optimization)
+  n_startup_trials: 10  # Random exploration trials before Bayesian optimization kicks in
+  multivariate: true  # Consider parameter interactions
+  seed: 42  # Random seed for reproducibility
+
+# Pruner for early stopping of poor trials
+pruner:
+  type: "MedianPruner"  # Stop trials that underperform median
+  n_startup_trials: 5  # Don't prune first 5 trials
+  n_warmup_steps: 10  # Wait 10 steps before pruning
+
+# Parameter search ranges
+# Format: [min, max] for continuous/integer parameters
+parameters:
+  # Grid configuration (constrained for $10k account)
+  grid:
+    grid_step_bps: [10, 200]  # Grid spacing in basis points (0.1% to 2%)
+    grid_levels_long: [3, 10]  # Number of buy levels (max 10 for inventory safety)
+    grid_levels_short: [3, 10]  # Number of sell levels (max 10 for inventory safety)
+    base_qty: [0.001, 0.004]  # Base order quantity (log scale, max ~$360/level at $90k BTC)
+    qty_scale: [1.0, 1.15]  # Quantity multiplier per level (max 15% growth to prevent overflow)
+
+  # Exit configuration
+  exit:
+    tp_steps: [1, 10]  # Take profit after N grid steps
+    sl_steps: [3, 20]  # Stop loss after N grid steps
+
+  # Regime detection configuration
+  regime:
+    adx_len: [7, 30]  # ADX period for trend strength
+    ema_fast: [5, 25]  # Fast EMA period
+    ema_slow: [20, 60]  # Slow EMA period
+    atr_len: [7, 30]  # ATR period for volatility
+    hysteresis_bps: [5, 50]  # Regime change threshold in bps
+
+  # Placement policy configuration
+  policy:
+    counter_levels: [2, 10]  # Number of counter-trend levels
+    counter_qty_scale: [0.3, 0.8]  # Counter-trend quantity scale
+
+  # Rebalance configuration
+  rebalance:
+    recenter_trigger_bps: [50, 500]  # Grid recenter trigger in bps
+
+  # Funding configuration
+  funding:
+    funding_max_cost_bps: [5, 50]  # Max funding cost threshold in bps
+
+  # Position configuration
+  position:
+    max_position_pct: [50, 95]  # Max position as % of account balance
+
+# Multi-objective function weights
+# Total weight should sum to 1.0 (accounting for negative drawdown penalty)
+# Positive weights = maximize, negative weights = minimize
+objective:
+  sharpe_ratio: 0.35  # Risk-adjusted returns (higher is better)
+  profit_factor: 0.30  # Ratio of wins to losses (higher is better)
+  calmar_ratio: 0.35  # Return per unit drawdown (higher is better)
+  drawdown_penalty: -0.20  # Penalty for drawdown (negative = minimize)
+
+# Hard constraints (trials violating these are scored as -inf)
+# These filter out parameter sets that produce unacceptable results
+constraints:
+  min_sharpe_ratio: 1.0  # Minimum acceptable Sharpe ratio
+  max_drawdown_pct: 20.0  # Maximum acceptable drawdown percentage
+  min_trades: 50  # Minimum number of trades for statistical significance
+  min_win_rate_pct: 45.0  # Minimum win rate percentage
+  min_profit_factor: 1.1  # Minimum ratio of wins to losses
+  min_calmar_ratio: 0.5  # Minimum return per unit drawdown
+
+# Output configuration
+output:
+  save_best_params: true  # Save best parameters to YAML
+  save_all_trials: true  # Save all trial results to database
+  export_csv: true  # Export results to CSV for analysis
+  plot_optimization_history: true  # Generate optimization history plots
+  plot_param_importances: true  # Generate parameter importance plots
+
+# Advanced settings
+advanced:
+  resume_study: true  # Resume interrupted optimization from database
+  show_progress_bar: true  # Display rich progress bar during optimization
+  log_level: "INFO"  # Logging level (DEBUG, INFO, WARNING, ERROR)
+  cache_backtests: false  # Cache backtest results (experimental)
+  validate_params: true  # Validate parameters before running backtest

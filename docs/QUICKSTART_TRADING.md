@@ -1,12 +1,5 @@
 # Quick Start Guide - Trading with NautilusTrader
 
-set -a; source .env; set +a
-
-uv run python -m naut_hedgegrid live \
-    --strategy-config configs/strategies/hedge_grid_v1.yaml \
-    --venue-config configs/venues/binance_futures_testnet.yaml \
-    2>&1 | tee reports/live_logs_testnet.log
-
 This guide covers paper trading, live trading, and backtesting with the HedgeGridV1 strategy.
 
 ## Table of Contents
@@ -29,9 +22,20 @@ This guide covers paper trading, live trading, and backtesting with the HedgeGri
 ```bash
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install project dependencies
+uv sync --all-extras
 ```
 
-### 2. API Keys
+### 2. Project Structure
+
+The core package is located at `naut_hedgegrid/` (not under `src/`):
+- `naut_hedgegrid/strategies/` - Strategy implementations
+- `naut_hedgegrid/strategy/` - Component building blocks (grid, detector, policy, etc.)
+- `naut_hedgegrid/config/` - Pydantic configuration models
+- `naut_hedgegrid/runners/` - CLI execution runners
+
+### 3. API Keys
 
 **Important**: Binance requires API authentication even for paper trading to fetch instrument definitions (metadata). API keys are used ONLY to load instrument specifications - no real orders are placed in paper or backtest modes.
 
@@ -49,11 +53,13 @@ BINANCE_TESTNET_API_SECRET=your_testnet_secret_here
 set -a; source .env; set +a
 ```
 
-### 3. Configuration Files
+### 4. Configuration Files
 
 The project includes default configurations:
-- `configs/strategies/hedge_grid_v1.yaml` - Strategy parameters
-- `configs/venues/binance_futures.yaml` - Venue settings
+- `configs/strategies/hedge_grid_v1.yaml` - Strategy parameters (default)
+- `configs/strategies/hedge_grid_v1_testnet.yaml` - Testnet strategy parameters
+- `configs/venues/binance_futures.yaml` - Production venue settings
+- `configs/venues/binance_futures_testnet.yaml` - Testnet venue settings
 - `configs/backtest/btcusdt_mark_trades_funding.yaml` - Backtest configuration
 
 ---
@@ -686,47 +692,42 @@ Test live order execution on Binance Testnet (fake money, real order matching).
    - Visit https://testnet.binancefuture.com
    - Create account and generate testnet API keys
 
-2. **Update Venue Config**
+2. **Use Existing Testnet Config**
 
-Create `configs/venues/binance_testnet.yaml`:
+The project includes pre-configured testnet settings at:
+- `configs/venues/binance_futures_testnet.yaml` - Testnet venue configuration
+- `configs/strategies/hedge_grid_v1_testnet.yaml` - Testnet strategy parameters (optional)
 
-```yaml
-name: BINANCE
-venue_type: EXCHANGE
-account_type: MARGIN
-base_currency: USDT
-
-api:
-  api_key: ${BINANCE_API_KEY}
-  api_secret: ${BINANCE_API_SECRET}
-  testnet: true
-  base_url: "https://testnet.binancefuture.com"
-
-trading:
-  hedge_mode: true
-  leverage: 10
-  margin_type: CROSSED
-
-instruments:
-  - symbol: BTCUSDT
-    instrument_type: PERPETUAL
-```
+You can use these configs directly or customize them for your needs.
 
 3. **Set Environment Variables**
 
 ```bash
 export BINANCE_API_KEY=testnet_api_key_here
 export BINANCE_API_SECRET=testnet_api_secret_here
+
+# Or add to .env file
+echo "BINANCE_API_KEY=testnet_api_key_here" >> .env
+echo "BINANCE_API_SECRET=testnet_api_secret_here" >> .env
+
+# Source environment
+set -a; source .env; set +a
 ```
 
 4. **Run Live Mode with Testnet Config**
 
 ```bash
+# Using default strategy config with testnet venue
 uv run python -m naut_hedgegrid live \
     --strategy-config configs/strategies/hedge_grid_v1.yaml \
-    --venue-config configs/venues/binance_testnet.yaml \
+    --venue-config configs/venues/binance_futures_testnet.yaml \
     2>&1 | tee reports/live_logs_testnet.log
 
+# Or use testnet-specific strategy config
+uv run python -m naut_hedgegrid live \
+    --strategy-config configs/strategies/hedge_grid_v1_testnet.yaml \
+    --venue-config configs/venues/binance_futures_testnet.yaml \
+    2>&1 | tee reports/live_logs_testnet.log
 ```
 
 Output will show `Testnet: Yes` in the status panel.
@@ -1087,13 +1088,15 @@ Before going live with real money:
 
 ---
 
-**Document Version**: 2.0
-**Last Updated**: 2025-01-17
+**Document Version**: 2.1
+**Last Updated**: 2025-10-22
 **Changes**:
-- Updated all commands to use unified CLI (`python -m naut_hedgegrid`)
-- Added comprehensive backtest guide with data preparation
-- Updated API key requirements (now required for paper trading)
-- Added operational controls section (`--enable-ops`)
-- Added additional CLI commands (flatten, status, metrics)
-- Expanded troubleshooting with more scenarios
-- Enhanced safety checklist and emergency procedures
+- Removed preamble bash code for clean markdown format
+- Fixed all path references: `src/naut_hedgegrid/` → `naut_hedgegrid/`
+- Confirmed all commands use unified CLI pattern (`python -m naut_hedgegrid`)
+- Updated Prerequisites section to clarify project structure
+- Fixed testnet instructions to reference existing config files:
+  - `configs/venues/binance_futures_testnet.yaml`
+  - `configs/strategies/hedge_grid_v1_testnet.yaml`
+- All config file paths verified and accurate
+- Maintained all excellent safety, troubleshooting, and emergency content

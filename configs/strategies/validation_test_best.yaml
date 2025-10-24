@@ -1,0 +1,38 @@
+strategy:
+  name: hedge_grid_v1
+  instrument_id: BTCUSDT-PERP.BINANCE
+grid:
+  grid_step_bps: 80.0
+  grid_levels_long: 20
+  grid_levels_short: 16
+  base_qty: 0.006009974718380315
+  qty_scale: 1.05
+exit:
+  tp_steps: 2
+  sl_steps: 4
+rebalance:
+  recenter_trigger_bps: 125.0
+  max_inventory_quote: 10000.0
+execution:
+  maker_only: true
+  use_post_only_retries: true
+  retry_attempts: 3
+  retry_delay_ms: 100
+funding:
+  funding_window_minutes: 480
+  funding_max_cost_bps: 10.0
+regime:
+  adx_len: 27
+  ema_fast: 17
+  ema_slow: 48
+  atr_len: 7
+  hysteresis_bps: 50.0
+position:
+  max_position_size: 1.0
+  max_leverage_used: 5.0
+  emergency_liquidation_buffer: 0.15
+  max_position_pct: 0.65
+policy:
+  strategy: throttled-counter
+  counter_levels: 9
+  counter_qty_scale: 0.4

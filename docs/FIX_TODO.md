@@ -1,44 +1,12 @@
-# Fix Todo List - Code Review Issues
+# Known Issues and TODO Items
 
-## ⚡ URGENT - Live Trading Failures (2025-10-21)
+This document tracks active issues and improvements that need attention in the naut-hedgegrid codebase.
 
-### NEW: Order ID Length Violation Causing 100% Retry Failure
-**Severity**: CRITICAL - All order retries failing
-**Status**: ✅ FIXED
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:932-935`
-**Problem**: Retry mechanism appends suffixes causing IDs > 36 chars (Binance limit)
-- Original: `HG1-LONG-01-1761018780259-24` (29 chars) ✓
-- Retry 1: `HG1-LONG-01-1761018780259-24-retry1-25` (37 chars) ✗
-- Retry 2: `HG1-LONG-01-1761018780259-24-retry1-25-26` (43 chars) ✗
+## Critical Issues 🔴 (Fix Immediately)
 
-**Fix Applied**:
-```python
-# Now generates compact retry IDs:
-base_order_id = client_order_id.split("-retry")[0]  # Strip old suffixes
-new_client_order_id = f"{base_order_id}-R{new_attempt}"  # Add compact suffix
-# Result: HG1-LONG-01-1761018780259-R1 (28 chars) ✓
-```
-
-### NEW: AttributeError - is_flat() Method Removed in Nautilus 1.220.0
-**Severity**: CRITICAL - System crash on bar processing
-**Status**: ✅ FIXED
-**Location**: Multiple locations in strategy.py (lines 1492, 1584, 1611-1612, 1661)
-**Problem**: Position.is_flat() method no longer exists in Nautilus 1.220.0
-**Error**: `AttributeError: 'Position' object has no attribute 'is_flat'`
-
-**Fix Applied**:
-```python
-# OLD (crashes):
-if position and not position.is_flat():
-
-# NEW (works):
-if position and position.quantity > 0:
-```
-
-### NEW: TP Order Price Precision Error
+### 1. TP Order Price Precision Error
 **Severity**: MEDIUM - Occasional TP order rejection
-**Status**: 🔧 TO FIX
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:_create_tp_order`
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:_create_tp_order`
 **Problem**: TP price not always conforming to Binance tick size
 **Error**: `BinanceClientError({'code': -4014, 'msg': 'Price not increased by tick size.'})`
 
@@ -48,11 +16,9 @@ if position and position.quantity > 0:
 tp_price_rounded = self._instrument.price_precision.round(tp_price)
 ```
 
-## Critical Issues 🔴 (Fix Immediately)
-
-### 1. Thread Safety Violations in Strategy State Management
+### 2. Thread Safety Violations in Strategy State Management
 **Severity**: CRITICAL - Can cause trading losses
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:566-571, 1465-1480`
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:566-571, 1465-1480`
 **Problem**: Multiple state variables accessed from both event handlers and API threads without proper synchronization. Reading multiple related fields is NOT atomic.
 
 **Current Code Problem**:
@@ -88,9 +54,9 @@ def get_ladders_snapshot(self) -> dict:
         }
 ```
 
-### 2. Duplicate TP/SL Order Creation Race Condition
+### 3. Duplicate TP/SL Order Creation Race Condition
 **Severity**: CRITICAL - Can violate exchange order limits
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:694-700`
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:694-700`
 **Problem**: Lock is taken AFTER checking set membership, creating race window
 
 **Current Code Problem**:
@@ -115,11 +81,11 @@ with self._fills_lock:
     self._fills_with_exits.add(fill_key)
 ```
 
-### 3. Decimal Precision Loss in Critical Calculations
+### 4. Decimal Precision Loss in Critical Calculations
 **Severity**: CRITICAL - Can cause order rejections or wrong execution prices
 **Location**:
-- `src/naut_hedgegrid/strategy/grid.py:87-91, 145-147`
-- `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:712-742`
+- `naut_hedgegrid/strategy/grid.py:87-91, 145-147`
+- `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:712-742`
 
 **Problem**: Using float() conversions too early loses precision
 
@@ -140,11 +106,11 @@ price_decimal = (mid_decimal - (Decimal(level) * price_step)).quantize(
 # Only convert when absolutely necessary (e.g., creating Nautilus Price object)
 ```
 
-### 4. Missing Error Recovery in Order Event Handlers
+### 5. Missing Error Recovery in Order Event Handlers
 **Severity**: CRITICAL - Can crash strategy leaving positions unhedged
 **Location**:
-- `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:on_order_filled (639-806)`
-- `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:on_order_rejected (856-985)`
+- `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:on_order_filled (639-806)`
+- `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:on_order_rejected (856-985)`
 
 **Problem**: No try-except blocks in critical event handlers
 
@@ -171,156 +137,9 @@ def on_order_rejected(self, event: OrderRejected) -> None:
         self._handle_critical_error()
 ```
 
-## Performance Issues 🟡 (High Priority)
-
-### 5. Inefficient Cache Queries in Hot Path
-**Severity**: HIGH - Performance degradation
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:1306-1345`
-**Problem**: O(n) iteration through all orders on every bar
-
-**Current Code**:
-```python
-def _get_live_grid_orders(self) -> list[LiveOrder]:
-    # Iterates all orders every time
-    for order in self.cache.orders_open(instrument_id=self.instrument_id):
-        # Parse and check each one
-```
-
-**Fix Required**:
-```python
-# Add to __init__
-self._grid_orders_by_level: dict[tuple[Side, int], LiveOrder] = {}
-
-# Update on order events
-def on_order_accepted(self, event: OrderAccepted) -> None:
-    order = self.cache.order(event.client_order_id)
-    parsed = self._parse_client_order_id(order.client_order_id.value)
-    if parsed and parsed.order_type == "GRID":
-        key = (parsed.side, parsed.level)
-        self._grid_orders_by_level[key] = LiveOrder(...)
-
-def on_order_canceled(self, event: OrderCanceled) -> None:
-    # Remove from dict
-
-def _get_live_grid_orders(self) -> list[LiveOrder]:
-    return list(self._grid_orders_by_level.values())  # O(1)
-```
-
-### 6. Repeated Parsing of Order IDs
-**Severity**: MEDIUM - Unnecessary CPU usage
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:1292-1304`
-**Problem**: parse_client_order_id called multiple times for same ID
-
-**Fix Required**:
-```python
-# Store parsed metadata with order tracking
-class TrackedOrder:
-    order: Order
-    parsed_id: Optional[ParsedOrderId]
-
-# Parse once on order acceptance and store
-```
-
-### 7. Blocking Warmup in Strategy Initialization
-**Severity**: MEDIUM - Blocks event loop startup
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:249-380`
-**Problem**: Synchronous HTTP calls in on_start()
-
-**Fix Required**:
-```python
-# Make warmup async
-async def _perform_warmup_async(self) -> None:
-    async with aiohttp.ClientSession() as session:
-        # Fetch data asynchronously
-        tasks = [
-            self._fetch_bars_async(session),
-            self._fetch_funding_async(session)
-        ]
-        await asyncio.gather(*tasks)
-
-# Call from on_start
-def on_start(self) -> None:
-    # Schedule async warmup
-    asyncio.create_task(self._perform_warmup_async())
-```
-
-## Best Practice Violations 🔵 (Medium Priority)
-
-### 8. Incorrect Event Loop Timer Usage
-**Severity**: MEDIUM - Misuse of NautilusTrader API
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:969-981`
-**Problem**: Using set_time_alert_ns for delays instead of set_timer_ns
-
-**Current Code**:
-```python
-# Incorrect - alert is for absolute time
-alert_time_ns = self.clock.timestamp_ns() + delay_ns
-self.clock.set_time_alert_ns(name=f"retry_{client_order_id}", ...)
-```
-
-**Fix Required**:
-```python
-# Correct - timer for delays
-self.clock.set_timer_ns(
-    name=f"retry_{client_order_id}",
-    interval_ns=delay_ns,
-    callback=retry_callback,
-    start=True,
-    stop_after=1  # One-shot timer
-)
-```
-
-### 9. Magic Numbers Throughout Code
-**Severity**: LOW - Maintainability issue
-**Location**: Multiple locations
-**Problem**: Hard-coded values without named constants
-
-**Fix Required**:
-```python
-# Add to strategy.py or create constants.py
-class StrategyConstants:
-    BINANCE_MAX_ORDER_ID_LENGTH = 36
-    DIAGNOSTIC_LOG_INTERVAL_NS = 300_000_000_000  # 5 minutes
-    NANOSECONDS_PER_MILLISECOND = 1_000_000
-    DEFAULT_RETRY_DELAY_MS = 100
-    MAX_RETRY_ATTEMPTS = 3
-    WARMUP_TIMEOUT_SECONDS = 30
-```
-
-### 10. Missing Type Hints on Complex Returns
-**Severity**: LOW - Type safety issue
-**Location**: `src/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py`
-**Problem**: Dict returns lack TypedDict definitions
-
-**Fix Required**:
-```python
-from typing import TypedDict
-
-class OperationalMetrics(TypedDict):
-    long_inventory_usdt: float
-    short_inventory_usdt: float
-    total_inventory_usdt: float
-    net_position_usdt: float
-    long_orders: int
-    short_orders: int
-    total_orders: int
-
-class LadderSnapshot(TypedDict):
-    long_ladder: list[dict]
-    short_ladder: list[dict]
-    mid_price: float
-
-# Update method signatures
-def get_operational_metrics(self) -> OperationalMetrics:
-    ...
-
-def get_ladders_snapshot(self) -> LadderSnapshot:
-    ...
-```
-
 ## Risk Management Gaps 🚨 (High Priority)
 
-### 11. Missing Position Size Validation
+### 6. Missing Position Size Validation
 **Severity**: HIGH - Can exceed account limits
 **Location**: Order submission logic
 **Problem**: No validation against account balance before submission
@@ -345,7 +164,7 @@ def _validate_order_size(self, order: Order) -> bool:
     return True
 ```
 
-### 12. No Circuit Breaker for Failures
+### 7. No Circuit Breaker for Failures
 **Severity**: HIGH - Can continue trading during system issues
 **Location**: Strategy error handling
 **Problem**: No automatic pause on repeated failures
@@ -380,7 +199,7 @@ def _check_circuit_breaker(self) -> None:
         )
 ```
 
-### 13. No Max Drawdown Protection
+### 8. No Max Drawdown Protection
 **Severity**: MEDIUM - Can exceed risk limits
 **Location**: Strategy risk management
 **Problem**: No automatic position reduction on drawdown
@@ -404,7 +223,7 @@ def _check_drawdown_limit(self) -> None:
         self._pause_trading = True
 ```
 
-### 14. No Automatic Position Flattening
+### 9. No Automatic Position Flattening
 **Severity**: MEDIUM - Positions remain open during critical errors
 **Location**: Error handling
 **Problem**: No emergency position closure
@@ -427,9 +246,156 @@ def _handle_critical_error(self) -> None:
     self._pause_trading = True
 ```
 
+## Performance Improvements 🟡 (Medium Priority)
+
+### 10. Inefficient Cache Queries in Hot Path
+**Severity**: HIGH - Performance degradation
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:1306-1345`
+**Problem**: O(n) iteration through all orders on every bar
+
+**Current Code**:
+```python
+def _get_live_grid_orders(self) -> list[LiveOrder]:
+    # Iterates all orders every time
+    for order in self.cache.orders_open(instrument_id=self.instrument_id):
+        # Parse and check each one
+```
+
+**Fix Required**:
+```python
+# Add to __init__
+self._grid_orders_by_level: dict[tuple[Side, int], LiveOrder] = {}
+
+# Update on order events
+def on_order_accepted(self, event: OrderAccepted) -> None:
+    order = self.cache.order(event.client_order_id)
+    parsed = self._parse_client_order_id(order.client_order_id.value)
+    if parsed and parsed.order_type == "GRID":
+        key = (parsed.side, parsed.level)
+        self._grid_orders_by_level[key] = LiveOrder(...)
+
+def on_order_canceled(self, event: OrderCanceled) -> None:
+    # Remove from dict
+
+def _get_live_grid_orders(self) -> list[LiveOrder]:
+    return list(self._grid_orders_by_level.values())  # O(1)
+```
+
+### 11. Repeated Parsing of Order IDs
+**Severity**: MEDIUM - Unnecessary CPU usage
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:1292-1304`
+**Problem**: parse_client_order_id called multiple times for same ID
+
+**Fix Required**:
+```python
+# Store parsed metadata with order tracking
+class TrackedOrder:
+    order: Order
+    parsed_id: Optional[ParsedOrderId]
+
+# Parse once on order acceptance and store
+```
+
+### 12. Blocking Warmup in Strategy Initialization
+**Severity**: MEDIUM - Blocks event loop startup
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:249-380`
+**Problem**: Synchronous HTTP calls in on_start()
+
+**Fix Required**:
+```python
+# Make warmup async
+async def _perform_warmup_async(self) -> None:
+    async with aiohttp.ClientSession() as session:
+        # Fetch data asynchronously
+        tasks = [
+            self._fetch_bars_async(session),
+            self._fetch_funding_async(session)
+        ]
+        await asyncio.gather(*tasks)
+
+# Call from on_start
+def on_start(self) -> None:
+    # Schedule async warmup
+    asyncio.create_task(self._perform_warmup_async())
+```
+
+## Code Quality Issues 🔵 (Medium Priority)
+
+### 13. Incorrect Event Loop Timer Usage
+**Severity**: MEDIUM - Misuse of NautilusTrader API
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py:969-981`
+**Problem**: Using set_time_alert_ns for delays instead of set_timer_ns
+
+**Current Code**:
+```python
+# Incorrect - alert is for absolute time
+alert_time_ns = self.clock.timestamp_ns() + delay_ns
+self.clock.set_time_alert_ns(name=f"retry_{client_order_id}", ...)
+```
+
+**Fix Required**:
+```python
+# Correct - timer for delays
+self.clock.set_timer_ns(
+    name=f"retry_{client_order_id}",
+    interval_ns=delay_ns,
+    callback=retry_callback,
+    start=True,
+    stop_after=1  # One-shot timer
+)
+```
+
+### 14. Magic Numbers Throughout Code
+**Severity**: LOW - Maintainability issue
+**Location**: Multiple locations
+**Problem**: Hard-coded values without named constants
+
+**Fix Required**:
+```python
+# Add to strategy.py or create constants.py
+class StrategyConstants:
+    BINANCE_MAX_ORDER_ID_LENGTH = 36
+    DIAGNOSTIC_LOG_INTERVAL_NS = 300_000_000_000  # 5 minutes
+    NANOSECONDS_PER_MILLISECOND = 1_000_000
+    DEFAULT_RETRY_DELAY_MS = 100
+    MAX_RETRY_ATTEMPTS = 3
+    WARMUP_TIMEOUT_SECONDS = 30
+```
+
+### 15. Missing Type Hints on Complex Returns
+**Severity**: LOW - Type safety issue
+**Location**: `naut_hedgegrid/strategies/hedge_grid_v1/strategy.py`
+**Problem**: Dict returns lack TypedDict definitions
+
+**Fix Required**:
+```python
+from typing import TypedDict
+
+class OperationalMetrics(TypedDict):
+    long_inventory_usdt: float
+    short_inventory_usdt: float
+    total_inventory_usdt: float
+    net_position_usdt: float
+    long_orders: int
+    short_orders: int
+    total_orders: int
+
+class LadderSnapshot(TypedDict):
+    long_ladder: list[dict]
+    short_ladder: list[dict]
+    mid_price: float
+
+# Update method signatures
+def get_operational_metrics(self) -> OperationalMetrics:
+    ...
+
+def get_ladders_snapshot(self) -> LadderSnapshot:
+    ...
+```
+
 ## Testing Requirements 📝
 
-### 15. Add Thread Safety Tests
+### 16. Add Thread Safety Tests
 ```python
 # test_thread_safety.py
 import threading
@@ -451,7 +417,7 @@ def test_concurrent_ladder_snapshot():
         t.join()
 ```
 
-### 16. Add Error Recovery Tests
+### 17. Add Error Recovery Tests
 ```python
 def test_order_filled_error_recovery():
     """Test that strategy recovers from errors in on_order_filled."""
@@ -470,26 +436,26 @@ def test_order_filled_error_recovery():
 ## Implementation Priority
 
 1. **Week 1 - Critical Fixes**
-   - [ ] Fix thread safety violations (#1, #2)
-   - [ ] Add error recovery to event handlers (#4)
-   - [ ] Fix Decimal precision loss (#3)
-   - [ ] Add position size validation (#11)
+   - [ ] Fix thread safety violations (#2, #3)
+   - [ ] Add error recovery to event handlers (#5)
+   - [ ] Fix Decimal precision loss (#4)
+   - [ ] Fix TP order price precision (#1)
 
 2. **Week 2 - Risk & Performance**
-   - [ ] Implement circuit breaker (#12)
-   - [ ] Add max drawdown protection (#13)
-   - [ ] Optimize cache queries (#5)
-   - [ ] Make warmup async (#7)
+   - [ ] Add position size validation (#6)
+   - [ ] Implement circuit breaker (#7)
+   - [ ] Add max drawdown protection (#8)
+   - [ ] Optimize cache queries (#10)
 
 3. **Week 3 - Best Practices**
-   - [ ] Fix timer usage (#8)
-   - [ ] Replace magic numbers (#9)
-   - [ ] Add TypedDict definitions (#10)
-   - [ ] Add emergency position flattening (#14)
+   - [ ] Make warmup async (#12)
+   - [ ] Fix timer usage (#13)
+   - [ ] Replace magic numbers (#14)
+   - [ ] Add TypedDict definitions (#15)
 
 4. **Week 4 - Testing & Validation**
-   - [ ] Add thread safety tests (#15)
-   - [ ] Add error recovery tests (#16)
+   - [ ] Add thread safety tests (#16)
+   - [ ] Add error recovery tests (#17)
    - [ ] Performance profiling
    - [ ] Load testing with high order volumes
 

@@ -5,7 +5,8 @@
       "WebFetch(domain:docs.nautilustrader.io)",
       "Bash(cd:*)",
       "Bash(cd:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Read(//Users/giovanni/Library/**)"
     ],
     "deny": [],
     "ask": []

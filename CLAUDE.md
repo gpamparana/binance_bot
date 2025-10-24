@@ -15,6 +15,8 @@ naut-hedgegrid is a hedge-mode grid trading system built on NautilusTrader for B
 - **CLI**: typer with rich console output
 - **Data**: Parquet catalogs, pandas, polars, pyarrow
 - **Testing**: pytest with hypothesis (property-based testing)
+- **Monitoring**: Prometheus metrics, FastAPI control endpoints
+- **Alerting**: Multi-channel notifications (Slack, Telegram)
 
 ## Build Commands
 
@@ -37,19 +39,76 @@ uv run pytest tests/strategy/test_grid.py -v
 uv run pytest tests/strategy/test_grid.py::test_build_ladders -v
 
 # Run with coverage
-uv run pytest tests/ --cov=src/naut_hedgegrid --cov-report=html
+uv run pytest tests/ --cov=naut_hedgegrid --cov-report=html
+```
+
+## CLI Commands
+
+The system provides a unified CLI via `python -m naut_hedgegrid <command>`:
+
+```bash
+# ============================================================================
+# TRADING COMMANDS
+# ============================================================================
 
 # Run backtest
-uv run python -m naut_hedgegrid backtest \
+python -m naut_hedgegrid backtest \
     --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
     --strategy-config configs/strategies/hedge_grid_v1.yaml
+
+# Start paper trading (simulated execution)
+python -m naut_hedgegrid paper \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --venue-config configs/venues/binance_futures.yaml
+
+# Start paper trading with operational controls
+python -m naut_hedgegrid paper \
+    --enable-ops \
+    --prometheus-port 9090 \
+    --api-port 8080
+
+# Start live trading (REAL MONEY)
+python -m naut_hedgegrid live \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --venue-config configs/venues/binance_futures.yaml \
+    --enable-ops
+
+# ============================================================================
+# OPERATIONAL CONTROL COMMANDS
+# ============================================================================
+
+# Flatten all positions (emergency)
+python -m naut_hedgegrid flatten
+
+# Flatten only LONG positions
+python -m naut_hedgegrid flatten --side LONG
+
+# Flatten only SHORT positions
+python -m naut_hedgegrid flatten --side SHORT
+
+# Query running strategy status
+python -m naut_hedgegrid status
+
+# Query status as JSON
+python -m naut_hedgegrid status --format json
+
+# Query Prometheus metrics
+python -m naut_hedgegrid metrics
+
+# Query metrics in raw Prometheus format
+python -m naut_hedgegrid metrics --format raw
+```
+
+**Note:** Use `uv run` prefix for all commands when running in development:
+```bash
+uv run python -m naut_hedgegrid backtest
 ```
 
 ## Architecture
 
 The system uses a **layered component architecture** with clear separation of concerns:
 
-### 1. Strategy Layer (`src/naut_hedgegrid/strategies/`)
+### 1. Strategy Layer (`naut_hedgegrid/strategies/`)
 
 Complete trading strategy implementations that orchestrate components below.
 
@@ -60,7 +119,7 @@ Complete trading strategy implementations that orchestrate components below.
   - Manages hedge mode positions (LONG/SHORT with position_id suffixes)
   - Attaches TP/SL on fills as reduce-only orders
 
-### 2. Component Layer (`src/naut_hedgegrid/strategy/`)
+### 2. Component Layer (`naut_hedgegrid/strategy/`)
 
 Reusable, composable strategy building blocks with pure functional interfaces:
 
@@ -89,7 +148,7 @@ Reusable, composable strategy building blocks with pure functional interfaces:
   - Generates minimal operations: adds, cancels, replaces
   - Uses price/qty tolerance to avoid unnecessary updates
 
-### 3. Domain Layer (`src/naut_hedgegrid/domain/`)
+### 3. Domain Layer (`naut_hedgegrid/domain/`)
 
 Core types and value objects:
 
@@ -100,7 +159,7 @@ Core types and value objects:
 - **LiveOrder**: Tracking struct for open orders
 - **OrderIntent**: Instruction for order operations (create/cancel/replace)
 
-### 4. Exchange Adapter Layer (`src/naut_hedgegrid/exchange/`)
+### 4. Exchange Adapter Layer (`naut_hedgegrid/exchange/`)
 
 - **PrecisionGuard** (`precision.py`): Enforces exchange requirements
   - Rounds prices to tick size
@@ -108,7 +167,7 @@ Core types and value objects:
   - Validates minimum notional
   - Filters invalid rungs from ladders
 
-### 5. Configuration Layer (`src/naut_hedgegrid/config/`)
+### 5. Configuration Layer (`naut_hedgegrid/config/`)
 
 Pydantic v2 models with YAML loading:
 
@@ -122,9 +181,15 @@ Pydantic v2 models with YAML loading:
 - **VenueConfig** (`venue.py`): Exchange connection settings
   - API credentials, hedge mode, leverage, rate limits
 
-### 6. Runner Layer (`src/naut_hedgegrid/runners/`)
+### 6. Runner Layer (`naut_hedgegrid/runners/`)
 
 CLI-driven execution:
+
+- **BaseRunner** (`base_runner.py`): Abstract base with common logic
+  - Environment validation
+  - Nautilus node configuration
+  - Strategy warmup orchestration
+  - Operations manager integration
 
 - **BacktestRunner** (`run_backtest.py`): Orchestrates backtests
   - Loads data from Parquet catalog
@@ -132,7 +197,17 @@ CLI-driven execution:
   - Runs simulation and extracts results
   - Saves artifacts (JSON + CSV)
 
-### 7. Metrics Layer (`src/naut_hedgegrid/metrics/`)
+- **PaperRunner** (`run_paper.py`): Paper trading execution
+  - Connects to real market data
+  - Simulates order fills
+  - No real money at risk
+
+- **LiveRunner** (`run_live.py`): Live trading execution
+  - Connects to exchange with execution enabled
+  - Places real orders with real money
+  - Requires API credentials
+
+### 7. Metrics Layer (`naut_hedgegrid/metrics/`)
 
 Performance analysis:
 
@@ -147,13 +222,128 @@ Performance analysis:
 
 - **ReportGenerator** (`report.py`): Calculates metrics from backtest results
 
+### 8. Data Pipeline Layer (`naut_hedgegrid/data/`)
+
+Complete data ingestion system for building Parquet catalogs:
+
+- **schemas.py**: Pydantic schemas + Nautilus converters
+  - TradeSchema → TradeTick
+  - MarkPriceSchema → Custom parquet
+  - FundingRateSchema → Custom parquet
+
+- **sources/**: Data source adapters
+  - `base.py`: Abstract DataSource interface
+  - `tardis_source.py`: Tardis.dev API integration
+  - `csv_source.py`: CSV file reader with auto-mapping
+  - `websocket_source.py`: JSONL WebSocket replay
+  - `binance_source.py`: Direct Binance API integration
+
+- **pipelines/**: Data processing
+  - `normalizer.py`: Timestamp conversion, validation, cleaning
+  - `replay_to_parquet.py`: Main pipeline orchestrator
+
+- **scripts/**: Utilities
+  - `generate_sample_data.py`: Sample data generator
+
+**Key Features:**
+- Multiple data sources (Tardis.dev, CSV, WebSocket captures)
+- Strict schema validation with Pydantic
+- Automatic normalization and deduplication
+- Daily partitioning for efficient storage
+- Rich CLI with progress bars
+
+### 9. Operational Controls Layer (`naut_hedgegrid/ops/`)
+
+Production-grade monitoring and control infrastructure:
+
+- **kill_switch.py**: Automated circuit breakers
+  - Max drawdown triggers
+  - Position size limits
+  - Funding cost thresholds
+  - Automatic position flattening
+
+- **alerts.py**: Multi-channel notifications
+  - Slack integration
+  - Telegram bot support
+  - Email alerts (planned)
+  - Configurable alert levels
+
+- **prometheus.py**: Metrics export
+  - 15 key metrics exposed
+  - Position, grid, risk, funding, PnL metrics
+  - Standard Prometheus format
+  - Integration with Grafana dashboards
+
+**15 Key Metrics:**
+- Position: long_inventory_usdt, short_inventory_usdt, net_inventory_usdt
+- Grid: active_rungs_long, active_rungs_short, open_orders
+- Risk: margin_ratio, maker_ratio
+- Funding: funding_rate_current, funding_cost_1h_projected_usdt
+- PnL: realized_pnl_usdt, unrealized_pnl_usdt, total_pnl_usdt
+- Health: uptime_seconds, last_bar_timestamp
+
+### 10. UI/API Layer (`naut_hedgegrid/ui/`)
+
+FastAPI control endpoints for live operations:
+
+- **api.py**: REST API for operational commands
+  - `GET /health`: Health check
+  - `GET /status`: Comprehensive status
+  - `POST /flatten`: Emergency position closure
+  - `POST /set-throttle`: Adjust aggressiveness
+  - `GET /ladders`: Grid ladder snapshot
+  - `GET /orders`: Open orders list
+  - `POST /start`: Start trading (stub)
+  - `POST /stop`: Stop trading (stub)
+
+**Authentication:** Optional API key via `X-API-Key` header
+
+### 11. Adapters Layer (`naut_hedgegrid/adapters/`)
+
+Exchange-specific patches and workarounds:
+
+- **binance_testnet_patch.py**: Binance testnet compatibility fixes
+  - Instrument provider patches
+  - Endpoint corrections
+  - Testnet-specific configurations
+
+### 12. Warmup Module (`naut_hedgegrid/warmup/`)
+
+Data warmup for live trading strategies:
+
+- **binance_warmer.py**: BinanceDataWarmer class
+  - Fetches historical klines from Binance API
+  - Converts to NautilusTrader Bar objects
+  - Provides DetectorBar format for regime detector
+  - Automatic endpoint selection (testnet vs production)
+  - Rate-limited API calls with pagination
+
+**Integration:**
+- `BaseRunner._warmup_strategy()`: Automatic warmup after initialization
+- `HedgeGridV1.warmup_regime_detector()`: Feeds historical bars to detector
+- Default: 70 bars fetched (50 for EMA slow + 20 buffer for ADX/ATR)
+
+**Performance:**
+- Startup overhead: 2-5 seconds typical
+- Non-blocking: Strategy starts even if warmup fails
+- API calls: 1-2 requests for 70 bars
+
+### 13. Utilities Layer (`naut_hedgegrid/utils/`)
+
+Common utilities and helpers:
+
+- Configuration loading utilities
+- Logging helpers
+- Time and date utilities
+- Mathematical helpers
+
 ## Configuration System
 
 All configuration is **code-as-config** using Pydantic v2 models with YAML files.
 
 ### Strategy Configuration Pattern
 
-1. Define Pydantic model in `src/naut_hedgegrid/config/`
+1. Define Pydantic model in `naut_hedgegrid/config/`
 2. Create loader class inheriting from `BaseYamlConfigLoader`
 3. Store YAML configs in `configs/` directory
 4. Load with: `ConfigLoader.load(path)`
@@ -173,6 +363,13 @@ api:
   api_key: ${BINANCE_API_KEY}
   api_secret: ${BINANCE_API_SECRET}
 ```
+
+**Required Environment Variables:**
+- `BINANCE_API_KEY`: Binance API key (for paper/live trading)
+- `BINANCE_API_SECRET`: Binance API secret (for paper/live trading)
+- `TARDIS_API_KEY`: Tardis.dev API key (optional, for data fetching)
+
+**Note:** Binance requires API credentials even for paper trading to load instrument definitions (metadata). No real orders are placed in paper trading mode.
 
 ## Component Orchestration Pattern
 
@@ -279,95 +476,171 @@ tests/strategy/test_funding_guard.py
 tests/strategy/test_order_sync.py
 
 # Integration tests (strategy lifecycle)
-tests/strategy/test_strategy_smoke.py  # 29 smoke tests
+tests/strategy/test_strategy_smoke.py
+
+# Operational controls tests
+tests/ops/test_kill_switch.py      # 27 tests
+tests/ops/test_alerts.py           # 25 tests
+tests/ops/test_prometheus.py       # 20 tests
+
+# Data pipeline tests
+tests/data/
 
 # Run subset
 uv run pytest tests/strategy/ -k "grid"
+
+# Run with coverage
+uv run pytest tests/ --cov=naut_hedgegrid --cov-report=html
 ```
 
-**Test Status:**
-- ✅ 248 core component tests passing
-- ⚠️ 27 strategy smoke tests have BarType parsing errors (known Nautilus 1.220.0 issue, non-critical)
+**Test Coverage:**
+- 248+ core component tests passing
+- 72 operational controls tests
+- Data pipeline tests
+- Strategy integration tests
 
-## Recent Fixes (2025-10-14)
+## Operational Controls
 
-### Nautilus 1.220.0 Integration - COMPLETE
+When paper or live trading is started with `--enable-ops`, the following services become available:
 
-Successfully integrated with NautilusTrader 1.220.0 API changes. All critical fixes verified and working.
+### Prometheus Metrics (Port 9090 default)
 
-#### Fix #1: BinanceAccountType Enum (base_runner.py:272)
-**Issue**: Typo in enum value `USDT_FUTURESS` (extra 'S') caused AttributeError.
-**Solution**: Corrected to `BinanceAccountType.USDT_FUTURES`.
-**Status**: ✅ Verified - no more AttributeError.
+Access metrics at: `http://localhost:9090/metrics`
 
-#### Fix #2: Client Factory Registration (base_runner.py:518-521)
-**Issue**: Nautilus 1.220.0 requires explicit registration of `LiveDataClientFactory` and `LiveExecClientFactory`.
-**Error**: `No 'LiveDataClientFactory' registered for BINANCE`.
-**Solution**: Added factory registration after TradingNode creation:
-```python
-# Register Binance client factories (required for Nautilus 1.220.0)
-self.node.add_data_client_factory(BINANCE, BinanceLiveDataClientFactory)
-if exec_client_config:
-    self.node.add_exec_client_factory(BINANCE, BinanceLiveExecClientFactory)
-```
-**Status**: ✅ Verified - factories register successfully.
-
-#### Fix #3: Instrument Loading Configuration (base_runner.py:275-277)
-**Issue**: InstrumentProviderConfig needs explicit loading configuration.
-**Initial Approach**: Tried `load_ids=[InstrumentId.from_str(instrument_id)]` but didn't work as expected.
-**Current Solution**: Using `load_all=True`:
-```python
-instrument_provider=InstrumentProviderConfig(
-    load_all=True,  # Load all instruments
-)
-```
-**Status**: ✅ Verified - works with proper API credentials.
-
-#### Fix #4: API Key Requirement for Paper Trading (base_runner.py:314-370)
-**Issue**: Paper trading mode needs Binance API credentials to load instrument definitions (metadata), but original warning message was misleading - suggested API keys were optional.
-**Error**: Binance returns 403 Forbidden when attempting to load instruments without authentication.
-**Impact**: Strategy reports "Instrument BTCUSDT-PERP.BINANCE not found in cache" when run without API keys.
-
-**Solution**: Improved warning message in `validate_environment()` to clearly explain:
-1. Binance requires API authentication even for instrument metadata queries
-2. Paper trading will likely fail without credentials
-3. Exact instructions to set environment variables
-4. Clarification that API keys are ONLY used to fetch instrument specs - no real orders are placed
-
-**Updated Warning Output**:
-```
-⚠ Warning: BINANCE_API_KEY and BINANCE_API_SECRET not set
-  Binance requires API authentication to load instrument definitions.
-  Paper trading mode will likely fail without credentials.
-
-  To fix, set your Binance API keys:
-    export BINANCE_API_KEY=your_key
-    export BINANCE_API_SECRET=your_secret
-
-  Note: Paper trading uses simulated execution - API keys are only
-        used to fetch instrument specifications, no real orders will be placed.
+Query via CLI:
+```bash
+python -m naut_hedgegrid metrics
 ```
 
-**Created Resources**:
-- `.env.example` file with template for API credentials
-- `.gitignore` already includes `.env` to prevent committing secrets
+Integration with monitoring tools:
+- Grafana dashboards
+- Alertmanager rules
+- Prometheus queries
 
-**Status**: ✅ Complete - improved user guidance and documentation.
+### FastAPI Control Endpoints (Port 8080 default)
 
-### BarType Parsing - FIXED
-**Issue**: BarType string parsing failed in HedgeGridV1 strategy.
-**Solution**: Strategy now constructs BarType programmatically in `on_start()` method instead of using string parsing.
-**Status**: ✅ Complete.
+Access Swagger docs at: `http://localhost:8080/docs`
 
-### TradingNode API - UPDATED
-**Change**: Updated from deprecated `node.start()` to `node.run()` for live/paper trading.
-**Impact**: All runners now use correct TradingNode lifecycle methods.
-**Status**: ✅ Complete.
+Available endpoints:
+- `GET /health` - Quick health check
+- `GET /api/v1/status` - Full strategy status
+- `POST /api/v1/flatten/{side}` - Flatten positions (LONG/SHORT/BOTH)
+- `POST /api/v1/set-throttle` - Adjust strategy aggressiveness
+- `GET /api/v1/ladders` - Current grid state
+- `GET /api/v1/orders` - Open orders
 
-### ImportableStrategyConfig - COMPLETE
-**Status**: HedgeGridV1 now fully integrates with Nautilus ImportableStrategyConfig pattern.
-**Benefit**: Proper strategy loading and configuration management.
-**Status**: ✅ Complete.
+Query via CLI:
+```bash
+# Get status
+python -m naut_hedgegrid status
+
+# Flatten all positions
+python -m naut_hedgegrid flatten
+
+# Flatten only longs
+python -m naut_hedgegrid flatten --side LONG
+```
+
+### Kill Switch
+
+Automated circuit breakers that monitor:
+- Max drawdown (unrealized)
+- Max drawdown (realized)
+- Position size limits (LONG/SHORT inventory)
+- Funding cost thresholds
+- Margin ratio
+
+When triggered:
+1. Cancel all open orders
+2. Close all positions (market orders)
+3. Send alerts via configured channels
+4. Log event with full context
+
+Configuration:
+```yaml
+kill_switch:
+  max_drawdown_pct: 5.0
+  max_position_usdt: 10000.0
+  max_funding_cost_1h: 50.0
+  margin_ratio_threshold: 0.9
+```
+
+### Alert System
+
+Multi-channel notifications for:
+- Kill switch triggers
+- Position fills
+- Error conditions
+- Strategy state changes
+
+Supported channels:
+- Slack webhooks
+- Telegram bot
+- Console logging
+- File logging
+
+## Data Pipeline
+
+### Quick Start
+
+Generate sample data from Tardis.dev:
+```bash
+export TARDIS_API_KEY="your_key"
+python -m naut_hedgegrid.data.scripts.generate_sample_data
+```
+
+### Manual Pipeline Execution
+
+```bash
+# Tardis.dev source
+python -m naut_hedgegrid.data.pipelines.replay_to_parquet \
+    --source tardis \
+    --symbol BTCUSDT \
+    --start 2024-01-01 \
+    --end 2024-01-03 \
+    --output ./data/catalog \
+    --data-types trades,mark,funding
+
+# CSV source
+python -m naut_hedgegrid.data.pipelines.replay_to_parquet \
+    --source csv \
+    --symbol BTCUSDT \
+    --config csv_config.json \
+    --output ./data/catalog
+
+# WebSocket JSONL source
+python -m naut_hedgegrid.data.pipelines.replay_to_parquet \
+    --source websocket \
+    --symbol BTCUSDT \
+    --config ws_config.json \
+    --output ./data/catalog
+```
+
+### Output Structure
+
+```
+data/catalog/
+├── BTCUSDT-PERP.BINANCE/
+│   ├── trade_tick.parquet       # Nautilus TradeTick objects
+│   ├── mark_price.parquet       # Custom parquet (timestamp, mark_price)
+│   └── funding_rate.parquet     # Custom parquet (timestamp, rate, next_funding)
+└── instruments.parquet           # CryptoPerpetual definitions
+```
+
+### Integration with Backtests
+
+Backtest runner automatically reads from catalog:
+```yaml
+# configs/backtest/btcusdt.yaml
+data:
+  catalog_path: "./data/catalog"
+  instruments:
+    - instrument_id: "BTCUSDT-PERP.BINANCE"
+      data_types:
+        - type: "TradeTick"
+        - type: "FundingRate"
+        - type: "MarkPrice"
+```
 
 ## Code Style Conventions
 
@@ -529,4 +802,28 @@ order = self.order_factory.limit(...)
 position_id = PositionId(f"{self.instrument_id}-LONG")
 self.submit_order(order, position_id=position_id)
 ```
-- Dont be a yes man, be critical in your thinking and remember to leverage the created subagents when needed.
+
+## Development Best Practices
+
+1. **Always run pre-commit hooks before committing:**
+   ```bash
+   uv run pre-commit run --all-files
+   ```
+
+2. **Use type hints on all public APIs** - mypy runs in strict mode
+
+3. **Write property-based tests** for pure functions using hypothesis
+
+4. **Keep components pure and functional** where possible - easier to test and reason about
+
+5. **Use Pydantic models for all configuration** - validation happens at load time
+
+6. **Follow the layered architecture** - don't skip layers or create circular dependencies
+
+7. **Document complex algorithms** with inline comments and docstrings
+
+8. **Use domain types** (`Side`, `Regime`, `Rung`, `Ladder`) instead of primitives for type safety
+
+9. **Test operational controls thoroughly** - they are critical for live trading safety
+
+10. **Always enable ops in production** - monitoring and control are essential for live trading

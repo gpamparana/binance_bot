@@ -844,14 +844,14 @@ class HedgeGridV1(Strategy):
                 # On any failure, remove from set to allow retry
                 with self._fills_lock:
                     self._fills_with_exits.discard(fill_key)
-                self.log.error(f"Failed to create/submit TP/SL for {fill_key}: {e}", exc_info=True)
+                self.log.error(f"Failed to create/submit TP/SL for {fill_key}: {e}")
                 return
 
             self.log.info(f"Submitted TP/SL orders for level {level}")
 
         except Exception as e:
             # Critical error handler for entire method
-            self.log.critical(f"Critical error in on_order_filled: {e}", exc_info=True)
+            self.log.error(f"Critical error in on_order_filled: {e}")
             self._handle_critical_error()
             # Re-raise to ensure Nautilus knows about the error
             raise
@@ -946,6 +946,24 @@ class HedgeGridV1(Strategy):
             client_order_id = str(event.client_order_id.value)
             rejection_reason = str(event.reason) if hasattr(event, "reason") else "Unknown"
 
+            # Idempotency check: prevent duplicate processing of same rejection event
+            # (Nautilus may call this handler multiple times for same rejection)
+            if not hasattr(self, '_processed_rejections'):
+                self._processed_rejections: set[str] = set()
+
+            rejection_key = f"{client_order_id}_{event.ts_event}"
+            if rejection_key in self._processed_rejections:
+                # Already processed this exact rejection event, skip duplicate
+                return
+            self._processed_rejections.add(rejection_key)
+
+            # Clean up old rejection keys (keep only last 1000 to prevent memory leak)
+            if len(self._processed_rejections) > 1000:
+                # Remove oldest half
+                to_remove = list(self._processed_rejections)[:500]
+                for key in to_remove:
+                    self._processed_rejections.discard(key)
+
             # Enhanced logging for TP/SL rejections
             if "-TP-" in client_order_id:
                 self.log.error(f"[TP REJECTED] Take-profit order rejected: {client_order_id}, reason: {rejection_reason}")
@@ -964,6 +982,20 @@ class HedgeGridV1(Strategy):
                 return
 
             intent = self._pending_retries[client_order_id]
+
+            # Don't retry Binance -5022 errors (post-only would trade)
+            # These errors mean the order price crossed the spread and would execute immediately.
+            # Retrying with small price adjustments won't help in fast-moving markets.
+            # Better to let the next bar recalculate the grid with updated market price.
+            if "-5022" in rejection_reason:
+                self.log.debug(
+                    f"Order {client_order_id} rejected with -5022 (post-only would trade), "
+                    f"abandoning retry - will recalculate grid on next bar"
+                )
+                del self._pending_retries[client_order_id]
+                if self._retry_handler:
+                    self._retry_handler.clear_history(client_order_id)
+                return
 
             # Check if retry is warranted for this rejection type
             if not self._retry_handler.should_retry(rejection_reason):
@@ -1078,7 +1110,7 @@ class HedgeGridV1(Strategy):
 
         except Exception as e:
             # Non-critical error handling
-            self.log.error(f"Error in on_order_rejected: {e}", exc_info=True)
+            self.log.error(f"Error in on_order_rejected: {e}")
             # Continue processing - non-critical error
 
     def on_order_denied(self, event) -> None:
@@ -1302,7 +1334,7 @@ class HedgeGridV1(Strategy):
 
         # Round TP price to instrument tick size to prevent Binance -4014 error
         if self._precision_guard:
-            tp_price = self._precision_guard.round_price(tp_price)
+            tp_price = self._precision_guard.clamp_price(tp_price)
 
         order = self.order_factory.limit(
             instrument_id=self._instrument.id,
@@ -1367,7 +1399,7 @@ class HedgeGridV1(Strategy):
 
         # Round SL price to instrument tick size for precision
         if self._precision_guard:
-            sl_price = self._precision_guard.round_price(sl_price)
+            sl_price = self._precision_guard.clamp_price(sl_price)
 
         order = self.order_factory.stop_market(
             instrument_id=self._instrument.id,

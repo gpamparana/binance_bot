@@ -10,8 +10,8 @@ venue:
 
 # API Configuration - PRODUCTION
 api:
-  api_key: ${BINANCE_API_KEY}
-  api_secret: ${BINANCE_API_SECRET}
+  api_key: ${BINANCE_API_KEY:-BACKTEST_MODE}  # Default for backtests
+  api_secret: ${BINANCE_API_SECRET:-BACKTEST_MODE}  # Default for backtests
   testnet: false  # Set to true for testnet (or use binance_futures_testnet.yaml)
   base_url: https://fapi.binance.com  # Production URL
 

@@ -63,16 +63,29 @@ For interactive tutorial, see [examples/quick_backtest.ipynb](examples/quick_bac
 ### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         HedgeGridV1 Strategy                        │
-│  (Entry point: implements NautilusTrader Strategy lifecycle)        │
-└────────────────────────────┬────────────────────────────────────────┘
+                        ┌──────────────────────────────────┐
+                        │   Operational Layer (ops/)       │
+                        │  - Prometheus Metrics            │
+                        │  - Alert System (Telegram/Email) │
+                        │  - Kill Switch                   │
+                        └──────────┬───────────────────────┘
+                                   │
+                        ┌──────────▼───────────────────────┐
+                        │   UI/API Layer (ui/)             │
+                        │  - FastAPI REST API              │
+                        │  - Status/Control/Metrics        │
+                        └──────────┬───────────────────────┘
+                                   │
+┌──────────────────────────────────▼───────────────────────────────────┐
+│                         HedgeGridV1 Strategy                         │
+│           (Entry point: implements NautilusTrader lifecycle)         │
+└────────────────────────────┬─────────────────────────────────────────┘
                              │
                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Component Orchestration                         │
-│                       (on_bar execution)                            │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                     Component Orchestration                          │
+│                       (on_bar execution)                             │
+└──────────────────────────────────────────────────────────────────────┘
          │                │               │              │
          ▼                ▼               ▼              ▼
     ┌────────┐      ┌──────────┐    ┌─────────┐   ┌──────────┐
@@ -92,7 +105,20 @@ For interactive tutorial, see [examples/quick_backtest.ipynb](examples/quick_bac
                               ┌─────────────────┐
                               │Execute Operations│
                               │(submit/cancel)   │
-                              └─────────────────┘
+                              └────────┬─────────┘
+                                       │
+                        ┌──────────────▼──────────────┐
+                        │   Exchange Layer            │
+                        │  - PrecisionGuard           │
+                        │  - Binance Adapter          │
+                        └──────────────┬──────────────┘
+                                       │
+                        ┌──────────────▼──────────────┐
+                        │   Data Pipeline (data/)     │
+                        │  - Binance/Tardis Sources   │
+                        │  - Parquet Normalization    │
+                        │  - Historical Warmup        │
+                        └─────────────────────────────┘
 ```
 
 ### Component Flow
@@ -307,39 +333,74 @@ uv run python -m naut_hedgegrid live \
 
 ```
 naut-hedgegrid/
-├── src/naut_hedgegrid/          # Main package
+├── naut_hedgegrid/              # Main package (NOT src/naut_hedgegrid/)
 │   ├── strategies/              # Complete strategy implementations
-│   │   └── hedge_grid_v1.py     # HedgeGridV1 strategy (entry point)
+│   │   └── hedge_grid_v1/       # HedgeGridV1 strategy module
+│   │       ├── strategy.py      # Main strategy class (entry point)
+│   │       └── config.py        # Strategy-specific config models
 │   ├── strategy/                # Reusable strategy components
-│   │   ├── detector.py          # RegimeDetector (volatility, volume)
+│   │   ├── detector.py          # RegimeDetector (volatility, volume, trend)
 │   │   ├── grid.py              # GridEngine (ladder generation)
-│   │   ├── policy.py            # PlacementPolicy (position sizing)
-│   │   ├── funding.py           # FundingGuard (funding rate filters)
+│   │   ├── policy.py            # PlacementPolicy (regime-based shaping)
+│   │   ├── funding_guard.py     # FundingGuard (funding rate filters)
 │   │   └── order_sync.py        # OrderDiff (minimal order updates)
 │   ├── domain/                  # Core business types
-│   │   └── types.py             # Side, Regime, Rung, Ladder, GridState
+│   │   └── types.py             # Side, Regime, Rung, Ladder, LiveOrder
 │   ├── exchange/                # Exchange adapters
 │   │   └── precision.py         # PrecisionGuard (tick/lot rounding)
+│   ├── adapters/                # Exchange-specific adapters
+│   │   └── binance_testnet_patch.py  # Binance testnet compatibility
 │   ├── config/                  # Configuration schemas
 │   │   ├── base.py              # BaseConfig, ConfigLoader (Pydantic v2)
 │   │   ├── backtest.py          # BacktestConfig (time range, data sources)
-│   │   ├── strategy.py          # StrategyConfig (grid params, risk limits)
-│   │   └── venue.py             # VenueConfig (exchange connection settings)
-│   ├── runners/                 # CLI execution
-│   │   ├── run_backtest.py      # Backtest runner (Nautilus BacktestEngine)
-│   │   ├── run_paper.py         # Paper trading runner (Nautilus sandbox)
-│   │   └── run_live.py          # Live trading runner (REAL MONEY)
+│   │   ├── strategy.py          # HedgeGridConfig (grid params, risk limits)
+│   │   ├── venue.py             # VenueConfig (exchange connection settings)
+│   │   └── operations.py        # OperationsConfig (API, Prometheus, alerts)
+│   ├── runners/                 # CLI execution runners
+│   │   ├── base_runner.py       # BaseRunner (shared TradingNode setup)
+│   │   ├── run_backtest.py      # BacktestRunner (Nautilus BacktestEngine)
+│   │   ├── run_paper.py         # PaperRunner (Nautilus sandbox)
+│   │   └── run_live.py          # LiveRunner (REAL MONEY)
+│   ├── ops/                     # Operational monitoring and control
+│   │   ├── prometheus.py        # Prometheus metrics exporter
+│   │   ├── alerts.py            # Alert system (Telegram, email, webhook)
+│   │   └── kill_switch.py       # Emergency position flattening
+│   ├── ui/                      # User interfaces
+│   │   └── api.py               # FastAPI REST API (status, control, metrics)
+│   ├── data/                    # Data pipeline
+│   │   ├── sources/             # Data source connectors
+│   │   │   ├── binance_source.py     # Binance REST/WebSocket
+│   │   │   ├── tardis_source.py      # Tardis historical data
+│   │   │   ├── csv_source.py         # CSV import
+│   │   │   └── websocket_source.py   # Generic WebSocket
+│   │   ├── pipelines/           # Data transformation pipelines
+│   │   │   ├── normalizer.py         # Data normalization
+│   │   │   └── replay_to_parquet.py  # Convert replay to Parquet
+│   │   ├── scripts/             # Data generation utilities
+│   │   │   └── generate_sample_data.py
+│   │   └── schemas.py           # Parquet schema definitions
+│   ├── warmup/                  # Historical data warmup utilities
+│   │   └── binance_warmer.py    # Binance data warmup for RegimeDetector
 │   ├── metrics/                 # Performance analysis
-│   │   └── calculator.py        # 32 metrics (Sharpe, Sortino, drawdown, etc.)
-│   └── cli.py                   # Unified CLI (Typer + Rich)
+│   │   └── report.py            # ReportGenerator (32 metrics)
+│   ├── utils/                   # Shared utilities
+│   │   └── yamlio.py            # YAML I/O helpers
+│   ├── cli.py                   # Unified CLI (Typer + Rich)
+│   └── __main__.py              # Module entry point
 ├── configs/                     # YAML configuration files
 │   ├── backtest/                # Backtest configs (time ranges, data sources)
 │   ├── strategies/              # Strategy configs (grid params, risk settings)
 │   └── venues/                  # Venue configs (Binance, more coming)
-├── tests/                       # Test suite (248 passing tests)
-│   ├── unit/                    # Component-level tests
-│   ├── integration/             # Multi-component tests
-│   └── test_parity.py           # Backtest vs paper trading validation
+├── tests/                       # Test suite (377 tests collected)
+│   ├── strategy/                # Strategy component tests
+│   │   ├── test_grid.py         # GridEngine tests
+│   │   ├── test_policy.py       # PlacementPolicy tests
+│   │   ├── test_detector.py     # RegimeDetector tests
+│   │   ├── test_funding_guard.py
+│   │   ├── test_order_sync.py
+│   │   └── test_strategy_smoke.py
+│   ├── test_parity.py           # Backtest vs paper trading validation
+│   └── test_precision.py        # PrecisionGuard tests
 ├── examples/                    # Runnable examples
 │   ├── quick_backtest.ipynb     # Interactive tutorial (Jupyter)
 │   ├── kill_switch_integration.py   # Emergency stop implementation
@@ -347,6 +408,11 @@ naut-hedgegrid/
 ├── docker/                      # Docker deployment
 │   ├── Dockerfile               # Multi-stage build (uv, non-root)
 │   └── README.md                # Deployment guide (550+ lines)
+├── docs/                        # Documentation
+│   ├── QUICKSTART_TRADING.md    # Quick start guide for live trading
+│   ├── OPERATIONS.md            # Operational procedures
+│   ├── RUNNER_API_REFERENCE.md  # Runner API documentation
+│   └── FIX_TODO.md              # Known issues and fixes
 ├── data/                        # Parquet data catalogs (mount point)
 ├── artifacts/                   # Backtest results and logs
 └── docker-compose.yml           # Service orchestration (backtest, paper, live)
@@ -378,11 +444,17 @@ make lint
 # Type check (mypy)
 make typecheck
 
-# Run tests (pytest, 248 tests)
+# Run tests (pytest)
 make test
 
-# Run single test
-uv run pytest tests/unit/test_grid.py::test_grid_generation -v
+# Run single test file
+uv run pytest tests/strategy/test_grid.py -v
+
+# Run single test function
+uv run pytest tests/strategy/test_grid.py::test_build_ladders -v
+
+# Run with coverage
+uv run pytest tests/ --cov=naut_hedgegrid --cov-report=html
 
 # Run all checks
 make all
@@ -390,12 +462,13 @@ make all
 
 ### Testing Philosophy
 
-- **248 core tests passing** (as of 2024-10-14)
+- **377 tests collected** (as of 2024-10-22)
 - **Unit tests**: Pure functions (grid, policy, detector) tested in isolation
+- **Component tests**: Strategy components (funding_guard, order_sync)
 - **Integration tests**: Multi-component orchestration
 - **Parity tests**: Backtest vs paper trading consistency
 - **Property-based tests**: Hypothesis for edge case discovery
-- **Known issues**: BarType parsing workaround for Nautilus 1.220.0
+- **Known issues**: Some BarType parsing errors in smoke tests (non-critical)
 
 ### Code Conventions
 
@@ -547,8 +620,21 @@ MIT License - see LICENSE file for details.
 ---
 
 **Questions or Issues?**
-- Documentation: [docker/README.md](docker/README.md), [CLAUDE.md](CLAUDE.md)
-- Examples: [examples/](examples/)
-- NautilusTrader: https://nautilustrader.io/docs
+
+**Documentation:**
+- [QUICKSTART_TRADING.md](docs/QUICKSTART_TRADING.md) - Quick start guide for live trading
+- [OPERATIONS.md](docs/OPERATIONS.md) - Operational procedures and monitoring
+- [RUNNER_API_REFERENCE.md](docs/RUNNER_API_REFERENCE.md) - Runner API documentation
+- [docker/README.md](docker/README.md) - Docker deployment guide (550+ lines)
+- [CLAUDE.md](CLAUDE.md) - Development guide for contributors
+
+**Examples:**
+- [examples/quick_backtest.ipynb](examples/quick_backtest.ipynb) - Interactive tutorial
+- [examples/kill_switch_integration.py](examples/kill_switch_integration.py) - Emergency stop
+- [examples/verify_data_pipeline.py](examples/verify_data_pipeline.py) - Data validation
+
+**External Resources:**
+- NautilusTrader Documentation: https://nautilustrader.io/docs
+- Binance Futures API: https://binance-docs.github.io/apidocs/futures/en/
 
 **⚠️ Remember: Always test in paper mode before live trading!**

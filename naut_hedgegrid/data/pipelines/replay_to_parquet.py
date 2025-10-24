@@ -446,12 +446,13 @@ def main(
     Run data pipeline to convert market data to Nautilus catalog.
 
     Example:
-        python -m naut_hedgegrid.data.pipelines.replay_to_parquet \\
-            --source tardis \\
-            --symbol BTCUSDT \\
-            --start 2024-01-01 \\
-            --end 2024-01-03 \\
-            --output ./data/catalog
+        python -m naut_hedgegrid.data.pipelines.replay_to_parquet \
+            --source binance \
+            --symbol BTCUSDT \
+            --start 2024-01-01 \
+            --end 2025-10-01 \
+            --output ./data/catalog \
+            --data-types mark,funding
     """
     # Parse data types
     data_type_list = [dt.strip() for dt in data_types.split(",")]
