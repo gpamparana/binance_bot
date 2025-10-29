@@ -40,14 +40,15 @@ class ParameterSpace:
     Total: 17 tunable parameters
     """
 
-    # Grid parameters (constrained for $10k account with ~$90k BTC)
-    # Inventory validation: avg_qty * levels * BTC_price <= $8000
-    # With levels=10, qty_scale=1.15, base_qty=0.004: ~$7240 (safe)
-    GRID_STEP_BPS = ParameterBounds(min_value=10, max_value=200, step=5)
-    GRID_LEVELS_LONG = ParameterBounds(min_value=3, max_value=10, step=1)  # Max 10 levels
-    GRID_LEVELS_SHORT = ParameterBounds(min_value=3, max_value=10, step=1)  # Max 10 levels
-    BASE_QTY = ParameterBounds(min_value=0.001, max_value=0.004, log_scale=True)  # Max ~$360 per level
-    QTY_SCALE = ParameterBounds(min_value=1.0, max_value=1.15, step=0.05)  # Max 1.15 (15% growth)
+    # Grid parameters (constrained for $10k account with ~$70k-$100k BTC)
+    # Inventory validation: total_qty_both_sides * BTC_price <= account * max_position_pct
+    # With levels=10, qty_scale=1.1, base_qty=0.003: ~0.04 BTC total = ~$3600 at $90k
+    # Increased grid steps (25-100 bps) for better fills with 1-minute bars
+    GRID_STEP_BPS = ParameterBounds(min_value=25, max_value=100, step=25)  # 0.25% to 1.0% spacing
+    GRID_LEVELS_LONG = ParameterBounds(min_value=5, max_value=10, step=1)  # At least 5 levels
+    GRID_LEVELS_SHORT = ParameterBounds(min_value=5, max_value=10, step=1)  # At least 5 levels
+    BASE_QTY = ParameterBounds(min_value=0.001, max_value=0.005, log_scale=True)  # $90-$450 per level at $90k BTC
+    QTY_SCALE = ParameterBounds(min_value=1.0, max_value=1.1, step=0.05)  # Max 1.1 (10% growth)
 
     # Exit parameters
     TP_STEPS = ParameterBounds(min_value=1, max_value=10, step=1)
@@ -70,8 +71,8 @@ class ParameterSpace:
     # Funding parameters
     FUNDING_MAX_COST_BPS = ParameterBounds(min_value=5, max_value=50, step=5)
 
-    # Position parameters
-    MAX_POSITION_PCT = ParameterBounds(min_value=50, max_value=95, step=5)
+    # Position parameters (as decimal fraction, not percentage)
+    MAX_POSITION_PCT = ParameterBounds(min_value=0.5, max_value=0.95, step=0.05)
 
     def __init__(self, custom_bounds: dict[str, ParameterBounds] | None = None):
         """
@@ -181,7 +182,7 @@ class ParameterSpace:
                 "funding_max_cost_bps": funding_max_cost_bps,
             },
             "position": {
-                "max_position_pct": max_position_pct,  # Keep as percentage (50-95)
+                "max_position_pct": max_position_pct,  # As decimal fraction (0.5-0.95)
                 # Other position params will come from base config
             },
         }
@@ -243,30 +244,53 @@ class ParameterSpace:
             if params["regime"]["ema_fast"] >= params["regime"]["ema_slow"]:
                 return False
 
-            # Check position limits (stored as percentage: 50-95)
-            if params["position"]["max_position_pct"] > 100.0 or params["position"]["max_position_pct"] < 10.0:
+            # Check position limits (stored as decimal fraction: 0.5-0.95)
+            if params["position"]["max_position_pct"] > 1.0 or params["position"]["max_position_pct"] < 0.1:
                 return False
 
-            # Check inventory caps - estimate max grid cost
-            # For geometric progression: total_qty = base_qty * (1 - scale^n) / (1 - scale)
-            # Approximate with: base_qty * scale^(n/2) * n for simplicity
+            # Check inventory caps - calculate exact max grid cost
             grid_params = params["grid"]
-            levels = max(grid_params["grid_levels_long"], grid_params["grid_levels_short"])
+            levels_long = grid_params["grid_levels_long"]
+            levels_short = grid_params["grid_levels_short"]
             base_qty = grid_params["base_qty"]
             qty_scale = grid_params["qty_scale"]
 
-            # Estimate average quantity per level (geometric mean)
-            avg_qty = base_qty * (qty_scale ** (levels / 2))
+            # Calculate exact total quantity for geometric progression
+            # Formula: sum = base_qty * (1 - scale^n) / (1 - scale)
+            # For scale = 1.0 (no scaling), it's simply base_qty * n
+            if qty_scale == 1.0:
+                total_qty_long = base_qty * levels_long
+                total_qty_short = base_qty * levels_short
+            else:
+                # Geometric sum formula
+                total_qty_long = base_qty * (1 - qty_scale**levels_long) / (1 - qty_scale)
+                total_qty_short = base_qty * (1 - qty_scale**levels_short) / (1 - qty_scale)
 
-            # Estimate total inventory needed (assuming BTC price ~$90k)
-            estimated_btc_price = 90000.0  # Conservative estimate
-            estimated_inventory = avg_qty * levels * estimated_btc_price
+            # Total BTC exposure across both sides (worst case: all orders filled)
+            total_btc_exposure = total_qty_long + total_qty_short
+
+            # Estimate BTC price range for validation
+            # Use conservative range to ensure we don't exceed limits
+            min_btc_price = 70000.0  # Lower bound
+            max_btc_price = 100000.0  # Upper bound
+
+            # Calculate maximum possible USDT exposure
+            max_usdt_exposure = total_btc_exposure * max_btc_price
 
             # Account balance from backtest config
-            max_inventory = 10000.0  # USDT
+            account_balance = 10000.0  # USDT
 
-            # Reject if estimated inventory exceeds 80% of account balance (safety margin)
-            if estimated_inventory > max_inventory * 0.8:
+            # Get max position percentage parameter (already as decimal fraction)
+            max_position_pct = params.get("position", {}).get("max_position_pct", 0.8)
+
+            # Maximum allowed exposure
+            max_allowed_exposure = account_balance * max_position_pct
+
+            # Reject if estimated inventory exceeds allowed exposure
+            # Be more conservative for optimization to avoid rejection errors
+            if max_usdt_exposure > max_allowed_exposure:
+                # Log rejection reason (useful for debugging)
+                # print(f"Rejected: {max_usdt_exposure:.2f} USDT > {max_allowed_exposure:.2f} USDT allowed")
                 return False
 
             return True

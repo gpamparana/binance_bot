@@ -162,6 +162,11 @@ class OrderDiff:
         self._precision_guard = precision_guard
         self._matcher = OrderMatcher(price_tolerance_bps, qty_tolerance_pct)
 
+        # Add caching to avoid unnecessary recalculations
+        self._last_desired_hash: int | None = None
+        self._last_live_hash: int | None = None
+        self._last_result: DiffResult | None = None
+
     def diff(self, desired_ladders: list[Ladder], live_orders: list[LiveOrder]) -> DiffResult:
         """Generate diff between desired ladders and live orders.
 
@@ -190,6 +195,16 @@ class OrderDiff:
             - Uses level+side to correlate desired with live (not strict client_order_id)
 
         """
+        # Check cache first - avoid recalculation if inputs haven't changed
+        desired_hash = hash(str(desired_ladders))
+        live_hash = hash(str(live_orders))
+
+        if (self._last_desired_hash == desired_hash and
+            self._last_live_hash == live_hash and
+            self._last_result is not None):
+            # Return cached result if inputs haven't changed
+            return self._last_result
+
         # Flatten and assign client order IDs to desired rungs
         desired_with_ids = self._assign_client_order_ids(desired_ladders)
 
@@ -248,7 +263,15 @@ class OrderDiff:
                 cancel_intent = OrderIntent.cancel(live_order.client_order_id)
                 cancels.append(cancel_intent)
 
-        return DiffResult.from_lists(adds, cancels, replaces)
+        # Create result
+        result = DiffResult.from_lists(adds, cancels, replaces)
+
+        # Cache the result for next call
+        self._last_desired_hash = desired_hash
+        self._last_live_hash = live_hash
+        self._last_result = result
+
+        return result
 
     def _assign_client_order_ids(self, ladders: list[Ladder]) -> list[tuple[str, Rung]]:
         """Assign client order IDs to rungs.
@@ -422,14 +445,18 @@ class PostOnlyRetryHandler:
         reason_lower = rejection_reason.lower()
 
         # Common post-only rejection patterns from various exchanges
+        # Note: NautilusTrader backtest uses "POST_ONLY" (underscore) and "TAKER"
         post_only_patterns = [
-            "post-only",
-            "post only",
-            "would be filled immediately",
-            "would immediately match",
-            "would execute as taker",
-            "would take liquidity",
-            "would cross",
+            "post-only",                    # Binance format (hyphen)
+            "post only",                    # Generic format (space)
+            "post_only",                    # NautilusTrader format (underscore)
+            "would be filled immediately",  # Common pattern
+            "would immediately match",      # Common pattern
+            "would execute as taker",       # Common pattern
+            "would have been a taker",      # NautilusTrader backtest format
+            "would take liquidity",         # Common pattern
+            "would cross",                  # Common pattern
+            "taker",                        # Generic catch-all for taker rejections
         ]
 
         return any(pattern in reason_lower for pattern in post_only_patterns)

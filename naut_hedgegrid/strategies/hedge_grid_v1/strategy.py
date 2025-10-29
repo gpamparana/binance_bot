@@ -802,23 +802,74 @@ class HedgeGridV1(Strategy):
             # Create position_id with side suffix
             position_id = PositionId(f"{self.instrument_id}-{side.value}")
 
+            # CRITICAL FIX: Verify position exists in cache before creating reduce-only orders
+            # In backtests, position updates may lag by 1 event cycle
+            position = self.cache.position(position_id)
+
+            # Add retry counter for position cache lag handling
+            retry_key = f"pos_retry_{fill_key}"
+            if not hasattr(self, '_position_retry_counts'):
+                self._position_retry_counts = {}
+
+            if position is None or position.quantity <= 0:
+                # Track retry attempts
+                retry_count = self._position_retry_counts.get(retry_key, 0)
+
+                if retry_count < 3:  # Allow up to 3 retries
+                    self._position_retry_counts[retry_key] = retry_count + 1
+                    self.log.warning(
+                        f"[TP/SL DELAYED] Position not yet in cache for {fill_key}, "
+                        f"retry {retry_count + 1}/3 (common in backtests)"
+                    )
+                    # Remove from tracking so it can be retried on next event
+                    with self._fills_lock:
+                        self._fills_with_exits.discard(fill_key)
+                    return
+                else:
+                    # Too many retries, position never appeared
+                    self.log.error(
+                        f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries"
+                    )
+                    # Clean up retry counter
+                    del self._position_retry_counts[retry_key]
+                    # Keep fill_key in set to prevent further attempts
+                    return
+
+            # Position found, clean up retry counter if it exists
+            if retry_key in getattr(self, '_position_retry_counts', {}):
+                del self._position_retry_counts[retry_key]
+
+            # Verify position quantity roughly matches fill quantity (allow 1% tolerance)
+            position_qty = float(position.quantity)
+            if abs(position_qty - fill_qty) > fill_qty * 0.01 and position_qty < fill_qty:
+                self.log.warning(
+                    f"[TP/SL DELAYED] Position qty {position_qty:.6f} < fill qty {fill_qty:.6f} "
+                    f"for {fill_key}, waiting for full position update"
+                )
+                # Remove from tracking so it can be retried
+                with self._fills_lock:
+                    self._fills_with_exits.discard(fill_key)
+                return
+
             try:
-                # Create TP limit order (reduce-only)
+                # Create TP limit order (reduce-only) using fill event timestamp for uniqueness
                 tp_order = self._create_tp_order(
                     side=side,
                     quantity=fill_qty,
                     tp_price=tp_price,
                     position_id=position_id,
                     level=level,  # type: ignore[arg-type]
+                    fill_event_ts=event.ts_event,  # Use fill event timestamp for unique IDs
                 )
 
-                # Create SL stop-market order (reduce-only)
+                # Create SL stop-market order (reduce-only) using fill event timestamp for uniqueness
                 sl_order = self._create_sl_order(
                     side=side,
                     quantity=fill_qty,
                     sl_price=sl_price,
                     position_id=position_id,
                     level=level,  # type: ignore[arg-type]
+                    fill_event_ts=event.ts_event,  # Use fill event timestamp for unique IDs
                 )
 
                 # Validate orders were created successfully
@@ -957,12 +1008,20 @@ class HedgeGridV1(Strategy):
                 return
             self._processed_rejections.add(rejection_key)
 
-            # Clean up old rejection keys (keep only last 1000 to prevent memory leak)
-            if len(self._processed_rejections) > 1000:
-                # Remove oldest half
-                to_remove = list(self._processed_rejections)[:500]
+            # Clean up old rejection keys (keep only last 100 to prevent memory leak)
+            if len(self._processed_rejections) > 100:
+                # Remove oldest entries, keep most recent 50
+                to_remove = list(self._processed_rejections)[:-50]
                 for key in to_remove:
                     self._processed_rejections.discard(key)
+
+            # Also clean up pending_retries if it gets too large
+            if len(self._pending_retries) > 50:
+                self.log.warning(f"Pending retries queue too large ({len(self._pending_retries)}), cleaning up old entries")
+                # Remove entries that have been pending for too long
+                keys_to_remove = list(self._pending_retries.keys())[:-25]
+                for key in keys_to_remove:
+                    del self._pending_retries[key]
 
             # Enhanced logging for TP/SL rejections
             if "-TP-" in client_order_id:
@@ -1008,7 +1067,7 @@ class HedgeGridV1(Strategy):
 
             # Check retry limit
             if intent.retry_count >= self._hedge_grid_config.execution.retry_attempts:  # type: ignore[union-attr]
-                self.log.error(
+                self.log.warning(
                     f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning"
                 )
                 del self._pending_retries[client_order_id]
@@ -1131,9 +1190,11 @@ class HedgeGridV1(Strategy):
 
         # Enhanced logging for TP/SL denials
         if "-TP-" in client_order_id:
-            self.log.error(f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}")
+            # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
+            self.log.debug(f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}")
         elif "-SL-" in client_order_id:
-            self.log.error(f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}")
+            # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
+            self.log.debug(f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}")
         else:
             self.log.error(f"Grid order denied: {client_order_id}, reason: {reason}")
 
@@ -1290,6 +1351,7 @@ class HedgeGridV1(Strategy):
         tp_price: float,
         position_id: PositionId,
         level: int,
+        fill_event_ts: int,
     ) -> LimitOrder:
         """
         Create take-profit limit order (reduce-only).
@@ -1300,6 +1362,7 @@ class HedgeGridV1(Strategy):
             tp_price: Take profit price
             position_id: Position ID with side suffix
             level: Grid level for order ID
+            fill_event_ts: Timestamp from fill event (nanoseconds) for unique ID generation
 
         Returns:
             Reduce-only limit order at TP price
@@ -1317,8 +1380,9 @@ class HedgeGridV1(Strategy):
             self._order_id_counter += 1
             counter = self._order_id_counter
 
-        # Use millisecond timestamp (13 chars) instead of nanosecond (19 chars)
-        timestamp_ms = self.clock.timestamp_ns() // 1_000_000
+        # Use fill event timestamp in milliseconds (13 chars) for uniqueness
+        # This ensures each fill event gets a unique ID even at same level
+        timestamp_ms = fill_event_ts // 1_000_000
 
         # Shorten side name: LONG->L, SHORT->S
         side_abbr = "L" if side == Side.LONG else "S"
@@ -1355,6 +1419,7 @@ class HedgeGridV1(Strategy):
         sl_price: float,
         position_id: PositionId,
         level: int,
+        fill_event_ts: int,
     ) -> StopMarketOrder:
         """
         Create stop-loss stop-market order (reduce-only).
@@ -1365,6 +1430,7 @@ class HedgeGridV1(Strategy):
             sl_price: Stop loss trigger price
             position_id: Position ID with side suffix
             level: Grid level for order ID
+            fill_event_ts: Timestamp from fill event (nanoseconds) for unique ID generation
 
         Returns:
             Reduce-only stop-market order at SL price
@@ -1382,8 +1448,9 @@ class HedgeGridV1(Strategy):
             self._order_id_counter += 1
             counter = self._order_id_counter
 
-        # Use millisecond timestamp (13 chars) instead of nanosecond (19 chars)
-        timestamp_ms = self.clock.timestamp_ns() // 1_000_000
+        # Use fill event timestamp in milliseconds (13 chars) for uniqueness
+        # This ensures each fill event gets a unique ID even at same level
+        timestamp_ms = fill_event_ts // 1_000_000
 
         # Shorten side name: LONG->L, SHORT->S
         side_abbr = "L" if side == Side.LONG else "S"
@@ -1400,6 +1467,37 @@ class HedgeGridV1(Strategy):
         # Round SL price to instrument tick size for precision
         if self._precision_guard:
             sl_price = self._precision_guard.clamp_price(sl_price)
+
+        # Validate SL price against current market to prevent immediate trigger
+        # This can happen in volatile markets or when fills occur at bar boundaries
+        if self._last_mid is not None:
+            current_mid = self._last_mid
+
+            if order_side == OrderSide.BUY:  # Closing SHORT position
+                # SL should be ABOVE current market to trigger on upward move
+                if sl_price <= current_mid:
+                    adjusted_price = current_mid * 1.0005
+                    self.log.warning(
+                        f"[SL ADJUST] Stop-loss {sl_price:.2f} at/below market "
+                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (+0.05%)"
+                    )
+                    # Adjust to slightly above current market
+                    sl_price = adjusted_price  # 0.05% buffer
+                    if self._precision_guard:
+                        sl_price = self._precision_guard.clamp_price(sl_price)
+
+            elif order_side == OrderSide.SELL:  # Closing LONG position
+                # SL should be BELOW current market to trigger on downward move
+                if sl_price >= current_mid:
+                    adjusted_price = current_mid * 0.9995
+                    self.log.warning(
+                        f"[SL ADJUST] Stop-loss {sl_price:.2f} at/above market "
+                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (-0.05%)"
+                    )
+                    # Adjust to slightly below current market
+                    sl_price = adjusted_price  # 0.05% buffer
+                    if self._precision_guard:
+                        sl_price = self._precision_guard.clamp_price(sl_price)
 
         order = self.order_factory.stop_market(
             instrument_id=self._instrument.id,
