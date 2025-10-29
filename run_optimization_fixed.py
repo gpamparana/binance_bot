@@ -49,9 +49,9 @@ def main():
     optimizer = StrategyOptimizer(
         backtest_config_path=backtest_config,
         base_strategy_config_path=strategy_config,
-        n_trials=50,                    # Start with 50 trials to test
-        n_jobs=1,                       # Sequential (safer for filesystem operations)
-        study_name="hedge_grid_fixed_optimization",
+        n_trials=10,                    # Start with 10 trials to test
+        n_jobs=4,                       # Parallel (faster for multiple trials)
+        study_name="hedge_grid_fixed_optimization_short",
         constraint_thresholds=constraints,
         verbose=True
     )
@@ -93,20 +93,29 @@ def main():
     optimizer.export_results(Path("optimization_results_fixed.csv"))
     print("✓ Results saved to: optimization_results_fixed.csv")
 
-    # Show summary statistics
+    # Show summary statistics - use optimizer's actual validation counts
     print("\nOptimization Summary:")
-    valid_trials = [t for t in study.trials if t.values is not None and len(t.values) > 0 and t.values[0] > float("-inf")]
+    # Trials that passed constraint validation (not just didn't crash)
+    valid_trials = [t for t in study.trials
+                   if t.user_attrs.get('is_valid', False)]
+    # Trials that completed (have a score, even if invalid)
+    completed_trials = [t for t in study.trials
+                       if t.values is not None and len(t.values) > 0 and t.values[0] > float("-inf")]
+
     print(f"  Total trials: {len(study.trials)}")
-    print(f"  Valid trials: {len(valid_trials)}")
+    print(f"  Completed trials: {len(completed_trials)}")
+    print(f"  Valid trials (passed constraints): {len(valid_trials)}")
     print(f"  Validity rate: {len(valid_trials)/len(study.trials)*100:.1f}%" if study.trials else "N/A")
-    if valid_trials:
-        scores = [t.values[0] for t in valid_trials if t.values and len(t.values) > 0]
-        if scores:
-            print(f"  Best score: {max(scores):.4f}")
-            print(f"  Avg score: {sum(scores)/len(scores):.4f}")
-            print(f"  Worst score: {min(scores):.4f}")
+
+    if completed_trials:
+        scores = [t.values[0] for t in completed_trials]
+        print(f"  Best score: {max(scores):.4f}")
+        if valid_trials:
+            valid_scores = [t.values[0] for t in valid_trials]
+            print(f"  Best valid score: {max(valid_scores):.4f}")
+            print(f"  Avg valid score: {sum(valid_scores)/len(valid_scores):.4f}")
         else:
-            print("  No valid scores to report")
+            print("  No trials passed constraint validation")
 
 
 if __name__ == "__main__":

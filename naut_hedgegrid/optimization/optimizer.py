@@ -233,6 +233,12 @@ class StrategyOptimizer:
                 if score > self.best_score:
                     self.best_score = score
 
+                # Store validation result in Optuna trial for later access
+                trial.set_user_attr('is_valid', is_valid)
+                trial.set_user_attr('total_trades', metrics.total_trades)
+                trial.set_user_attr('sharpe_ratio', metrics.sharpe_ratio)
+                trial.set_user_attr('win_rate_pct', metrics.win_rate_pct)
+
                 # Save trial to database
                 trial_data = OptimizationTrial(
                     study_name=self.study_name,
