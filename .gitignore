@@ -212,3 +212,4 @@ __marimo__/
 summary.json
 config.json
 optimization_results.db
+*DS_Store*
