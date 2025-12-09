@@ -13,7 +13,8 @@
       "Bash(tee:*)",
       "Bash(chmod:*)",
       "Bash(cat:*)",
-      "Bash(uv run ruff check:*)"
+      "Bash(uv run ruff check:*)",
+      "Bash(xargs ls:*)"
     ],
     "deny": [],
     "ask": []

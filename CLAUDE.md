@@ -17,6 +17,7 @@ naut-hedgegrid is a hedge-mode grid trading system built on NautilusTrader for B
 - **Testing**: pytest with hypothesis (property-based testing)
 - **Monitoring**: Prometheus metrics, FastAPI control endpoints
 - **Alerting**: Multi-channel notifications (Slack, Telegram)
+- **Optimization**: Optuna (Bayesian hyperparameter tuning with SQLite persistence)
 
 ## Build Commands
 
@@ -97,6 +98,33 @@ python -m naut_hedgegrid metrics
 
 # Query metrics in raw Prometheus format
 python -m naut_hedgegrid metrics --format raw
+
+# ============================================================================
+# OPTIMIZATION COMMANDS
+# ============================================================================
+
+# Run parameter optimization (100 trials)
+python -m naut_hedgegrid.optimization.cli optimize \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --trials 100 \
+    --study-name my_optimization
+
+# Run optimization with CSV export
+python -m naut_hedgegrid.optimization.cli optimize \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --trials 200 \
+    --export-csv artifacts/optimization_results.csv
+
+# Analyze completed optimization study
+python -m naut_hedgegrid.optimization.cli analyze my_optimization \
+    --top-n 10 \
+    --export-csv results.csv
+
+# Cleanup low-performing trials from database
+python -m naut_hedgegrid.optimization.cli cleanup my_optimization \
+    --keep-top-n 50
 ```
 
 **Note:** Use `uv run` prefix for all commands when running in development:
@@ -336,6 +364,99 @@ Common utilities and helpers:
 - Logging helpers
 - Time and date utilities
 - Mathematical helpers
+
+### 14. Optimization Framework (`naut_hedgegrid/optimization/`)
+
+Bayesian hyperparameter optimization using Optuna:
+
+- **StrategyOptimizer** (`optimizer.py`): Main orchestrator
+  - Coordinates all optimization components
+  - Runs trials with parameter sampling
+  - Saves best configs to YAML files
+  - Exports results to CSV
+
+- **ParameterSpace** (`param_space.py`): Defines 17 tunable parameters
+  - Grid parameters (5): `grid_step_bps`, `grid_levels_long`, `grid_levels_short`, `base_qty`, `qty_scale`
+  - Exit parameters (2): `tp_steps`, `sl_steps`
+  - Regime parameters (5): `adx_len`, `ema_fast`, `ema_slow`, `atr_len`, `hysteresis_bps`
+  - Policy parameters (2): `counter_levels`, `counter_qty_scale`
+  - Rebalance parameters (1): `recenter_trigger_bps`
+  - Funding parameters (1): `funding_max_cost_bps`
+  - Position parameters (1): `max_position_pct`
+
+- **MultiObjectiveFunction** (`objective.py`): Weighted scoring
+  - Sharpe ratio (0.35 weight)
+  - Profit factor (0.30 weight)
+  - Calmar ratio (0.35 weight)
+  - Drawdown penalty (-0.20 weight)
+  - Adaptive normalization across trials
+
+- **ConstraintsValidator** (`constraints.py`): Hard constraint filtering
+  - Minimum Sharpe ratio (default 1.0)
+  - Maximum drawdown (default 20%)
+  - Minimum trades (default 50)
+  - Minimum win rate (default 45%)
+  - Minimum profit factor (default 1.1)
+  - Minimum Calmar ratio (default 0.5)
+
+- **ParallelBacktestRunner** (`parallel_runner.py`): Concurrent execution
+  - Multi-process backtest execution
+  - Configurable job count (`n_jobs`)
+
+- **OptimizationResultsDB** (`results_db.py`): SQLite persistence
+  - Stores trial parameters and metrics
+  - Query best trials
+  - Export to CSV
+  - Cleanup low-performing trials
+
+**Parameter Bounds (designed for ~$10k account):**
+| Parameter | Min | Max | Notes |
+|-----------|-----|-----|-------|
+| grid_step_bps | 25 | 100 | 0.25%-1.0% spacing |
+| grid_levels_long | 5 | 10 | Levels below mid |
+| grid_levels_short | 5 | 10 | Levels above mid |
+| base_qty | 0.001 | 0.005 | BTC per level (log scale) |
+| qty_scale | 1.0 | 1.1 | Geometric growth factor |
+| tp_steps | 1 | 10 | Grid steps for TP |
+| sl_steps | 3 | 20 | Grid steps for SL |
+| adx_len | 7 | 30 | ADX indicator period |
+| ema_fast | 5 | 25 | Fast EMA period |
+| ema_slow | 20 | 60 | Slow EMA period |
+
+**Optimization Usage:**
+```python
+from naut_hedgegrid.optimization import (
+    StrategyOptimizer,
+    ConstraintsValidator,
+    MultiObjectiveFunction,
+)
+from naut_hedgegrid.optimization.constraints import ConstraintThresholds
+from naut_hedgegrid.optimization.objective import ObjectiveWeights
+
+# Custom constraint thresholds
+constraints = ConstraintThresholds(
+    min_sharpe_ratio=0.5,
+    max_drawdown_pct=25.0,
+    min_trades=30,
+)
+
+# Initialize optimizer
+optimizer = StrategyOptimizer(
+    backtest_config_path="configs/backtest/btcusdt.yaml",
+    base_strategy_config_path="configs/strategies/hedge_grid_v1.yaml",
+    n_trials=200,
+    n_jobs=4,  # Parallel execution
+    study_name="my_optimization",
+    constraint_thresholds=constraints,
+)
+
+# Run optimization
+study = optimizer.optimize()
+
+# Best parameters saved to: configs/strategies/my_optimization_best.yaml
+print(f"Best score: {study.best_value:.4f}")
+print(f"Best params: {study.best_trial.params}")
+```
 
 ## Configuration System
 
@@ -774,6 +895,53 @@ artifacts/backtests/20241014_120000/
 └── metrics.csv       # Performance metrics
 ```
 
+## Optimization Workflow
+
+```bash
+# 1. Ensure backtest data is prepared (see Backtest Workflow)
+
+# 2. Run optimization
+uv run python -m naut_hedgegrid.optimization.cli optimize \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --trials 200 \
+    --study-name btcusdt_grid_opt
+
+# 3. View optimization progress (live during run)
+# Results are saved continuously to SQLite database
+
+# 4. Analyze results after completion
+uv run python -m naut_hedgegrid.optimization.cli analyze btcusdt_grid_opt \
+    --top-n 10
+
+# 5. Best config automatically saved to:
+configs/strategies/btcusdt_grid_opt_best.yaml
+
+# 6. Run backtest with optimized parameters
+uv run python -m naut_hedgegrid backtest \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/btcusdt_grid_opt_best.yaml
+```
+
+**Output Files:**
+- `optimization_results.db`: SQLite database with all trial results
+- `configs/strategies/{study_name}_best.yaml`: Best parameters as strategy config
+- `artifacts/optimization_results.csv`: Optional CSV export of all trials
+
+**Overnight Optimization Script:**
+
+For long-running optimizations, use the provided script:
+```bash
+# Run 200 trials with 4 parallel workers
+uv run python run_optimization_overnight.py
+```
+
+This script:
+- Uses relaxed constraints for exploration
+- Runs 200 trials with parallel execution
+- Saves best results automatically
+- Provides detailed summary statistics
+
 ## NautilusTrader Integration Notes
 
 **Strategy Lifecycle:**
@@ -827,3 +995,7 @@ self.submit_order(order, position_id=position_id)
 9. **Test operational controls thoroughly** - they are critical for live trading safety
 
 10. **Always enable ops in production** - monitoring and control are essential for live trading
+
+11. **Run optimization before deploying new strategies** - use the optimization framework to find robust parameters
+
+12. **Validate optimized parameters with out-of-sample testing** - optimize on one time period, test on another
