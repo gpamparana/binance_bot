@@ -49,18 +49,15 @@ class TestObjectiveWeights:
         """Test default weight values."""
         weights = ObjectiveWeights()
 
-        assert weights.sharpe_ratio == 0.30
-        assert weights.profit_factor == 0.25
-        assert weights.calmar_ratio == 0.25
+        assert weights.sharpe_ratio == 0.35
+        assert weights.profit_factor == 0.30
+        assert weights.calmar_ratio == 0.35
         assert weights.drawdown_penalty == -0.20
 
     def test_custom_weights(self):
         """Test custom weight values."""
         weights = ObjectiveWeights(
-            sharpe_ratio=0.4,
-            profit_factor=0.3,
-            calmar_ratio=0.3,
-            drawdown_penalty=-0.1
+            sharpe_ratio=0.4, profit_factor=0.3, calmar_ratio=0.3, drawdown_penalty=-0.1
         )
 
         assert weights.sharpe_ratio == 0.4
@@ -72,10 +69,7 @@ class TestObjectiveWeights:
         """Test that invalid weight sums raise error."""
         with pytest.raises(ValueError, match="must sum to ~1.0"):
             ObjectiveWeights(
-                sharpe_ratio=0.1,
-                profit_factor=0.1,
-                calmar_ratio=0.1,
-                drawdown_penalty=-0.2
+                sharpe_ratio=0.1, profit_factor=0.1, calmar_ratio=0.1, drawdown_penalty=-0.2
             )
 
 
@@ -122,6 +116,12 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         score = func.calculate_score(metrics)
@@ -136,10 +136,10 @@ class TestMultiObjectiveFunction:
 
         # Metrics with NaN values
         metrics = PerformanceMetrics(
-            total_pnl=float('nan'),
-            total_return_pct=float('nan'),
-            annualized_return_pct=float('nan'),
-            sharpe_ratio=float('nan'),
+            total_pnl=float("nan"),
+            total_return_pct=float("nan"),
+            annualized_return_pct=float("nan"),
+            sharpe_ratio=float("nan"),
             sortino_ratio=None,
             calmar_ratio=None,
             max_drawdown_pct=None,
@@ -162,12 +162,18 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=None,
             max_long_exposure=None,
             max_short_exposure=None,
+            time_in_market_pct=None,
+            avg_ladder_depth_long=None,
+            avg_ladder_depth_short=None,
+            ladder_fill_rate_pct=None,
+            avg_mae_pct=None,
+            avg_mfe_pct=None,
         )
 
         score = func.calculate_score(metrics)
 
         # Should return -inf for invalid metrics
-        assert score == float('-inf')
+        assert score == float("-inf")
 
     def test_calculate_score_too_few_trades(self):
         """Test that strategies with too few trades are rejected."""
@@ -200,12 +206,18 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         score = func.calculate_score(metrics)
 
         # Should return -inf for too few trades
-        assert score == float('-inf')
+        assert score == float("-inf")
 
     def test_calculate_score_complete_loss(self):
         """Test that complete loss strategies are rejected."""
@@ -238,12 +250,18 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         score = func.calculate_score(metrics)
 
         # Should return -inf for complete loss
-        assert score == float('-inf')
+        assert score == float("-inf")
 
     def test_get_component_scores(self):
         """Test retrieval of component scores."""
@@ -276,6 +294,12 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         components = func.get_component_scores(metrics)
@@ -327,6 +351,12 @@ class TestMultiObjectiveFunction:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         func.calculate_score(metrics)

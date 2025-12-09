@@ -127,6 +127,12 @@ def normalize_mark_prices(df: pd.DataFrame, source_type: str = "unknown") -> pd.
     # Normalize timestamp
     df["timestamp"] = _normalize_timestamp(df["timestamp"])
 
+    # Handle simple mark_price column (single price data format)
+    if "mark_price" in df.columns and (df["mark_price"] <= 0).any():
+        invalid_count = (df["mark_price"] <= 0).sum()
+        logger.warning(f"Found {invalid_count} invalid mark prices (<=0), removing")
+        df = df[df["mark_price"] > 0]
+
     # Validate OHLCV prices (all must be positive)
     for col in ["open", "high", "low", "close"]:
         if col in df.columns and (df[col] <= 0).any():

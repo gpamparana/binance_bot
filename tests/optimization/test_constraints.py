@@ -28,7 +28,7 @@ class TestConstraintThresholds:
             min_trades=100,
             min_win_rate_pct=50.0,
             min_profit_factor=1.5,
-            min_calmar_ratio=1.0
+            min_calmar_ratio=1.0,
         )
 
         assert thresholds.min_sharpe_ratio == 1.5
@@ -105,6 +105,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         assert validator.is_valid(metrics) is True
@@ -140,6 +146,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         assert validator.is_valid(metrics) is False
@@ -175,6 +187,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         assert validator.is_valid(metrics) is False
@@ -210,6 +228,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         assert validator.is_valid(metrics) is False
@@ -245,6 +269,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         violations = validator.get_violations(metrics)
@@ -287,6 +317,12 @@ class TestConstraintsValidator:
             avg_short_exposure=0.5,
             max_long_exposure=1.0,
             max_short_exposure=1.0,
+            time_in_market_pct=80.0,
+            avg_ladder_depth_long=5.0,
+            avg_ladder_depth_short=5.0,
+            ladder_fill_rate_pct=30.0,
+            avg_mae_pct=0.5,
+            avg_mfe_pct=1.0,
         )
 
         # Lenient mode should pass with 1 violation

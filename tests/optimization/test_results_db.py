@@ -38,7 +38,7 @@ class TestOptimizationResultsDB:
             is_valid=True,
             violations=[],
             timestamp=datetime.now(),
-            duration_seconds=120.0
+            duration_seconds=120.0,
         )
 
         trial_id = temp_db.save_trial(trial)
@@ -56,7 +56,7 @@ class TestOptimizationResultsDB:
                 is_valid=True,
                 violations=[],
                 timestamp=datetime.now(),
-                duration_seconds=100.0 + i * 10
+                duration_seconds=100.0 + i * 10,
             )
 
             temp_db.save_trial(trial)
@@ -79,7 +79,7 @@ class TestOptimizationResultsDB:
                 is_valid=True,
                 violations=[],
                 timestamp=datetime.now(),
-                duration_seconds=120.0
+                duration_seconds=120.0,
             )
             temp_db.save_trial(trial)
 
@@ -103,7 +103,7 @@ class TestOptimizationResultsDB:
                 is_valid=is_valid,
                 violations=[] if is_valid else ["Failed constraint"],
                 timestamp=datetime.now(),
-                duration_seconds=120.0
+                duration_seconds=120.0,
             )
             temp_db.save_trial(trial)
 
@@ -125,7 +125,7 @@ class TestOptimizationResultsDB:
                 is_valid=True,
                 violations=[],
                 timestamp=datetime.now(),
-                duration_seconds=120.0
+                duration_seconds=120.0,
             )
             temp_db.save_trial(trial)
 
@@ -147,7 +147,7 @@ class TestOptimizationResultsDB:
                 is_valid=True,
                 violations=[],
                 timestamp=datetime.now(),
-                duration_seconds=120.0
+                duration_seconds=120.0,
             )
             temp_db.save_trial(trial)
 
@@ -175,7 +175,7 @@ class TestOptimizationResultsDB:
                 is_valid=i % 2 == 0,  # 5 valid, 5 invalid
                 violations=[] if i % 2 == 0 else ["Failed"],
                 timestamp=datetime.now(),
-                duration_seconds=100.0
+                duration_seconds=100.0,
             )
             temp_db.save_trial(trial)
 
@@ -201,7 +201,7 @@ class TestOptimizationResultsDB:
                 is_valid=True,
                 violations=[],
                 timestamp=datetime.now(),
-                duration_seconds=120.0
+                duration_seconds=120.0,
             )
             temp_db.save_trial(trial)
 
@@ -212,8 +212,9 @@ class TestOptimizationResultsDB:
         trials = temp_db.get_best_trials("test_study", n=100, only_valid=False)
         assert len(trials) == 10
 
-        # Verify they're the best 10
-        assert all(t["score"] >= 0.69 for t in trials)  # Top 10 scores
+        # Verify they're the best 10 (scores range from 0.50 to 0.69)
+        # Top 10 are indices 10-19: scores 0.60 to 0.69
+        assert all(t["score"] >= 0.60 for t in trials)  # Top 10 scores
 
     def test_thread_safety(self, temp_db):
         """Test that database operations are thread-safe."""
@@ -229,7 +230,7 @@ class TestOptimizationResultsDB:
                     is_valid=True,
                     violations=[],
                     timestamp=datetime.now(),
-                    duration_seconds=120.0
+                    duration_seconds=120.0,
                 )
                 db.save_trial(trial)
 

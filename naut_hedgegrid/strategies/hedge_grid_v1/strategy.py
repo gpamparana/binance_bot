@@ -1,11 +1,9 @@
 """HedgeGridV1 trading strategy implementation."""
 
 import threading
-import time
 from collections import deque
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from functools import lru_cache
 
 from nautilus_trader.core.message import Event
 from nautilus_trader.model.data import Bar, BarType
@@ -154,6 +152,19 @@ class HedgeGridV1(Strategy):
         self._grid_orders_cache: dict[str, LiveOrder] = {}  # Track grid orders by client_order_id
         self._grid_orders_lock = threading.Lock()  # Thread safety for grid order cache
 
+        # Rejection tracking for idempotency (Phase 2.3 fix: initialize in __init__)
+        self._processed_rejections: set[str] = set()
+        self._rejections_lock = threading.Lock()  # Thread safety for rejection tracking
+
+        # Position retry tracking for cache lag handling (Phase 2.2 fix)
+        self._position_retry_counts: dict[str, int] = {}
+
+        # Instance-level order ID parsing cache (Phase 4.4 fix: avoid lru_cache class collision)
+        self._parsed_order_id_cache: dict[str, dict] = {}
+
+        # Diagnostic logging throttle (initialize to 0 instead of using hasattr)
+        self._last_diagnostic_log: int = 0
+
     def on_start(self) -> None:
         """
         Start the strategy.
@@ -293,22 +304,23 @@ class HedgeGridV1(Strategy):
             # Skip warmup in backtests as they have their own data
             # Backtests are detected by checking the clock type
             # TestClock is used in backtests, LiveClock in live/paper trading
-            if hasattr(self.clock, '__class__') and 'Test' in self.clock.__class__.__name__:
+            if hasattr(self.clock, "__class__") and "Test" in self.clock.__class__.__name__:
                 self.log.debug("Skipping warmup in backtest mode")
                 return
 
             # Try to import the warmup module
             try:
-                from naut_hedgegrid.warmup import BinanceDataWarmer
                 from naut_hedgegrid.config.venue import VenueConfig, VenueConfigLoader
+                from naut_hedgegrid.warmup import BinanceDataWarmer
             except ImportError as e:
                 self.log.warning(f"Warmup module not available: {e}, starting without warmup")
                 return
 
             # Get API credentials from environment
             import os
-            api_key = os.environ.get('BINANCE_API_KEY', '')
-            api_secret = os.environ.get('BINANCE_API_SECRET', '')
+
+            api_key = os.environ.get("BINANCE_API_KEY", "")
+            api_secret = os.environ.get("BINANCE_API_SECRET", "")
 
             if not api_key or not api_secret:
                 self.log.warning("No Binance API credentials found, skipping warmup")
@@ -450,8 +462,16 @@ class HedgeGridV1(Strategy):
 
         if is_warm:
             try:
-                ema_fast_val = self._regime_detector.ema_fast.value if self._regime_detector.ema_fast.value else 0
-                ema_slow_val = self._regime_detector.ema_slow.value if self._regime_detector.ema_slow.value else 0
+                ema_fast_val = (
+                    self._regime_detector.ema_fast.value
+                    if self._regime_detector.ema_fast.value
+                    else 0
+                )
+                ema_slow_val = (
+                    self._regime_detector.ema_slow.value
+                    if self._regime_detector.ema_slow.value
+                    else 0
+                )
                 adx_val = self._regime_detector.adx.value if self._regime_detector.adx.value else 0
                 self.log.info(
                     f"✓ Regime detector warmup complete: current regime={final_regime}, "
@@ -459,7 +479,7 @@ class HedgeGridV1(Strategy):
                     f"EMA slow={ema_slow_val:.2f}, "
                     f"ADX={adx_val:.2f}"
                 )
-            except Exception as e:
+            except Exception:
                 # Simpler logging if there's an issue
                 self.log.info(f"✓ Regime detector warmup complete: current regime={final_regime}")
         else:
@@ -516,6 +536,10 @@ class HedgeGridV1(Strategy):
             bar: New bar data
 
         """
+        # SAFETY CHECK: Skip all trading if in critical error or paused state
+        if self._critical_error or self._pause_trading:
+            return
+
         # Check all components are initialized before processing bar
         if (
             self._hedge_grid_config is None
@@ -551,9 +575,7 @@ class HedgeGridV1(Strategy):
         # Log regime and price with error handling
         try:
             warm_status = self._regime_detector.is_warm
-            self.log.info(
-                f"Bar: close={mid:.2f}, regime={regime}, warm={warm_status}"
-            )
+            self.log.info(f"Bar: close={mid:.2f}, regime={regime}, warm={warm_status}")
         except Exception as e:
             # Fallback logging if there's an issue with property access
             self.log.warning(f"Error logging bar info: {e}. Bar close={mid:.2f}")
@@ -643,8 +665,7 @@ class HedgeGridV1(Strategy):
         # Diagnostic logging for fill monitoring (every 5 minutes)
         current_time = self.clock.timestamp_ns()
         if current_time % 300_000_000_000 < 60_000_000_000:  # Within first minute of 5-min window
-            if not hasattr(self, '_last_diagnostic_log') or \
-               current_time - self._last_diagnostic_log >= 300_000_000_000:
+            if current_time - self._last_diagnostic_log >= 300_000_000_000:
                 self._last_diagnostic_log = current_time
                 self._log_diagnostic_status()
 
@@ -687,10 +708,14 @@ class HedgeGridV1(Strategy):
         try:
             # Check if we're in critical error state
             if self._critical_error:
-                self.log.warning(f"Strategy in critical error state, ignoring fill event: {event.client_order_id}")
+                self.log.warning(
+                    f"Strategy in critical error state, ignoring fill event: {event.client_order_id}"
+                )
                 return
 
-            self.log.info(f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}")
+            self.log.info(
+                f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}"
+            )
 
             client_order_id = str(event.client_order_id.value)
 
@@ -808,8 +833,6 @@ class HedgeGridV1(Strategy):
 
             # Add retry counter for position cache lag handling
             retry_key = f"pos_retry_{fill_key}"
-            if not hasattr(self, '_position_retry_counts'):
-                self._position_retry_counts = {}
 
             if position is None or position.quantity <= 0:
                 # Track retry attempts
@@ -825,18 +848,17 @@ class HedgeGridV1(Strategy):
                     with self._fills_lock:
                         self._fills_with_exits.discard(fill_key)
                     return
-                else:
-                    # Too many retries, position never appeared
-                    self.log.error(
-                        f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries"
-                    )
-                    # Clean up retry counter
-                    del self._position_retry_counts[retry_key]
-                    # Keep fill_key in set to prevent further attempts
-                    return
+                # Too many retries, position never appeared
+                self.log.error(
+                    f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries"
+                )
+                # Clean up retry counter
+                del self._position_retry_counts[retry_key]
+                # Keep fill_key in set to prevent further attempts
+                return
 
             # Position found, clean up retry counter if it exists
-            if retry_key in getattr(self, '_position_retry_counts', {}):
+            if retry_key in self._position_retry_counts:
                 del self._position_retry_counts[retry_key]
 
             # Verify position quantity roughly matches fill quantity (allow 1% tolerance)
@@ -999,37 +1021,66 @@ class HedgeGridV1(Strategy):
 
             # Idempotency check: prevent duplicate processing of same rejection event
             # (Nautilus may call this handler multiple times for same rejection)
-            if not hasattr(self, '_processed_rejections'):
-                self._processed_rejections: set[str] = set()
-
+            # Thread-safe access using lock (initialized in __init__)
             rejection_key = f"{client_order_id}_{event.ts_event}"
-            if rejection_key in self._processed_rejections:
-                # Already processed this exact rejection event, skip duplicate
-                return
-            self._processed_rejections.add(rejection_key)
+            with self._rejections_lock:
+                if rejection_key in self._processed_rejections:
+                    # Already processed this exact rejection event, skip duplicate
+                    return
+                self._processed_rejections.add(rejection_key)
 
-            # Clean up old rejection keys (keep only last 100 to prevent memory leak)
-            if len(self._processed_rejections) > 100:
-                # Remove oldest entries, keep most recent 50
-                to_remove = list(self._processed_rejections)[:-50]
-                for key in to_remove:
-                    self._processed_rejections.discard(key)
+                # Clean up old rejection keys (keep only last 100 to prevent memory leak)
+                if len(self._processed_rejections) > 100:
+                    # Remove oldest entries, keep most recent 50
+                    to_remove = list(self._processed_rejections)[:-50]
+                    for key in to_remove:
+                        self._processed_rejections.discard(key)
 
             # Also clean up pending_retries if it gets too large
             if len(self._pending_retries) > 50:
-                self.log.warning(f"Pending retries queue too large ({len(self._pending_retries)}), cleaning up old entries")
+                self.log.warning(
+                    f"Pending retries queue too large ({len(self._pending_retries)}), cleaning up old entries"
+                )
                 # Remove entries that have been pending for too long
                 keys_to_remove = list(self._pending_retries.keys())[:-25]
                 for key in keys_to_remove:
                     del self._pending_retries[key]
 
-            # Enhanced logging for TP/SL rejections
-            if "-TP-" in client_order_id:
-                self.log.error(f"[TP REJECTED] Take-profit order rejected: {client_order_id}, reason: {rejection_reason}")
-            elif "-SL-" in client_order_id:
-                self.log.error(f"[SL REJECTED] Stop-loss order rejected: {client_order_id}, reason: {rejection_reason}")
+            # Enhanced logging for TP/SL rejections and cleanup to allow retry
+            if "-TP-" in client_order_id or "-SL-" in client_order_id:
+                order_type = "TP" if "-TP-" in client_order_id else "SL"
+                self.log.error(
+                    f"[{order_type} REJECTED] {order_type} order rejected: {client_order_id}, reason: {rejection_reason}"
+                )
+
+                # Extract fill_key from order ID to allow retry (Phase 2.2 fix)
+                # Order ID format: HG1-TP-L01-timestamp-counter or HG1-SL-S05-timestamp-counter
+                try:
+                    parts = client_order_id.split("-")
+                    if len(parts) >= 3:
+                        side_level_part = parts[2]  # e.g., "L01" or "S05"
+                        if len(side_level_part) >= 2:
+                            side_abbr = side_level_part[0]  # "L" or "S"
+                            level_str = side_level_part[1:]  # "01" or "05"
+                            side = "LONG" if side_abbr == "L" else "SHORT"
+                            level = int(level_str)
+                            fill_key = f"{side}-{level}"
+
+                            # Remove from tracking to allow retry on next fill
+                            with self._fills_lock:
+                                if fill_key in self._fills_with_exits:
+                                    self._fills_with_exits.discard(fill_key)
+                                    self.log.info(
+                                        f"[{order_type} RETRY] Removed {fill_key} from tracking to allow TP/SL retry"
+                                    )
+                except (ValueError, IndexError) as e:
+                    self.log.warning(
+                        f"Could not extract fill_key from rejected order ID: {client_order_id}, error: {e}"
+                    )
             else:
-                self.log.warning(f"Grid order rejected: {client_order_id}, reason: {rejection_reason}")
+                self.log.warning(
+                    f"Grid order rejected: {client_order_id}, reason: {rejection_reason}"
+                )
 
             # Check if retry handler is initialized
             if self._retry_handler is None or not self._retry_handler.enabled:
@@ -1097,7 +1148,11 @@ class HedgeGridV1(Strategy):
 
             # Generate new unique order ID for retry
             # Extract base order ID without any retry suffixes
-            base_order_id = client_order_id.split("-retry")[0] if "-retry" in client_order_id else client_order_id
+            base_order_id = (
+                client_order_id.split("-retry")[0]
+                if "-retry" in client_order_id
+                else client_order_id
+            )
             base_order_id = base_order_id.split("-R")[0] if "-R" in base_order_id else base_order_id
 
             # Create compact retry ID that stays under 36 char limit
@@ -1191,10 +1246,14 @@ class HedgeGridV1(Strategy):
         # Enhanced logging for TP/SL denials
         if "-TP-" in client_order_id:
             # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
-            self.log.debug(f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}")
+            self.log.debug(
+                f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}"
+            )
         elif "-SL-" in client_order_id:
             # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
-            self.log.debug(f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}")
+            self.log.debug(
+                f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}"
+            )
         else:
             self.log.error(f"Grid order denied: {client_order_id}, reason: {reason}")
 
@@ -1388,11 +1447,15 @@ class HedgeGridV1(Strategy):
         side_abbr = "L" if side == Side.LONG else "S"
 
         # Format: HG1-TP-L01-1234567890123-1 (max ~30 chars)
-        client_order_id_str = f"{self._strategy_name}-TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+        client_order_id_str = (
+            f"{self._strategy_name}-TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+        )
 
         # Validate length (Binance limit is 36 chars)
         if len(client_order_id_str) > 36:
-            self.log.error(f"TP order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
+            self.log.error(
+                f"TP order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}"
+            )
             # Fallback: use even shorter format
             client_order_id_str = f"TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
@@ -1456,11 +1519,15 @@ class HedgeGridV1(Strategy):
         side_abbr = "L" if side == Side.LONG else "S"
 
         # Format: HG1-SL-L01-1234567890123-1 (max ~30 chars)
-        client_order_id_str = f"{self._strategy_name}-SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+        client_order_id_str = (
+            f"{self._strategy_name}-SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
+        )
 
         # Validate length (Binance limit is 36 chars)
         if len(client_order_id_str) > 36:
-            self.log.error(f"SL order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
+            self.log.error(
+                f"SL order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}"
+            )
             # Fallback: use even shorter format
             client_order_id_str = f"SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
@@ -1525,10 +1592,12 @@ class HedgeGridV1(Strategy):
         """
         return ClientOrderId(client_order_id_str)
 
-    @lru_cache(maxsize=1000)
     def _parse_cached_order_id(self, client_order_id: str) -> dict:
         """
-        Parse client order ID with caching to avoid repeated parsing.
+        Parse client order ID with instance-level caching to avoid repeated parsing.
+
+        Uses instance-level dict cache instead of @lru_cache to prevent
+        cache collision between multiple strategy instances.
 
         Args:
             client_order_id: Client order ID string
@@ -1537,7 +1606,22 @@ class HedgeGridV1(Strategy):
             Parsed order ID dict
 
         """
-        return parse_client_order_id(client_order_id)
+        # Check instance-level cache first
+        if client_order_id in self._parsed_order_id_cache:
+            return self._parsed_order_id_cache[client_order_id]
+
+        # Parse and cache result
+        result = parse_client_order_id(client_order_id)
+        self._parsed_order_id_cache[client_order_id] = result
+
+        # Prevent memory leak: limit cache size to 1000 entries
+        if len(self._parsed_order_id_cache) > 1000:
+            # Remove oldest entries (first 200)
+            keys_to_remove = list(self._parsed_order_id_cache.keys())[:200]
+            for key in keys_to_remove:
+                del self._parsed_order_id_cache[key]
+
+        return result
 
     def _get_live_grid_orders(self) -> list[LiveOrder]:
         """
@@ -1924,8 +2008,7 @@ class HedgeGridV1(Strategy):
 
         # Log state for debugging
         self.log.critical(
-            "Critical error handler complete. "
-            "Trading paused. Manual intervention required."
+            "Critical error handler complete. " "Trading paused. Manual intervention required."
         )
 
     def _validate_order_size(self, order) -> bool:
@@ -1945,15 +2028,20 @@ class HedgeGridV1(Strategy):
                 return False
 
             # Calculate notional value
-            notional = float(order.quantity) * float(order.price) if hasattr(order, 'price') else 0
+            notional = float(order.quantity) * float(order.price) if hasattr(order, "price") else 0
 
             # Get free balance (assuming USDT as base currency)
             from nautilus_trader.model.identifiers import Currency
+
             base_currency = Currency.from_str("USDT")
             free_balance = float(account.balance_free(base_currency))
 
             # Apply maximum position percentage (default 95%)
-            max_position_pct = getattr(self._hedge_grid_config, 'max_position_pct', 0.95) if self._hedge_grid_config else 0.95
+            max_position_pct = (
+                getattr(self._hedge_grid_config, "max_position_pct", 0.95)
+                if self._hedge_grid_config
+                else 0.95
+            )
 
             if notional > free_balance * max_position_pct:
                 self.log.warning(
@@ -1977,7 +2065,10 @@ class HedgeGridV1(Strategy):
         """
         if self._circuit_breaker_active:
             # Check if cooldown period has passed
-            if self._circuit_breaker_reset_time and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time:
+            if (
+                self._circuit_breaker_reset_time
+                and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time
+            ):
                 self._circuit_breaker_active = False
                 self._circuit_breaker_reset_time = None
                 self.log.info("Circuit breaker reset - resuming normal operation")
@@ -1993,10 +2084,16 @@ class HedgeGridV1(Strategy):
             self._error_window.popleft()
 
         # Check threshold (default 10 errors per minute)
-        max_errors = getattr(self._hedge_grid_config, 'max_errors_per_minute', 10) if self._hedge_grid_config else 10
+        max_errors = (
+            getattr(self._hedge_grid_config, "max_errors_per_minute", 10)
+            if self._hedge_grid_config
+            else 10
+        )
 
         if len(self._error_window) >= max_errors:
-            self.log.critical(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
+            self.log.critical(
+                f"Circuit breaker activated - {len(self._error_window)} errors in last minute"
+            )
             self._circuit_breaker_active = True
 
             # Cancel all orders
@@ -2004,7 +2101,11 @@ class HedgeGridV1(Strategy):
                 self.cancel_order(order)
 
             # Set reset time (5 minutes from now)
-            cooldown_seconds = getattr(self._hedge_grid_config, 'circuit_breaker_cooldown_seconds', 300) if self._hedge_grid_config else 300
+            cooldown_seconds = (
+                getattr(self._hedge_grid_config, "circuit_breaker_cooldown_seconds", 300)
+                if self._hedge_grid_config
+                else 300
+            )
             self._circuit_breaker_reset_time = now + (cooldown_seconds * 1_000_000_000)
 
             self.log.info(f"Circuit breaker will reset in {cooldown_seconds} seconds")
@@ -2023,6 +2124,7 @@ class HedgeGridV1(Strategy):
 
             # Get current balance
             from nautilus_trader.model.identifiers import Currency
+
             base_currency = Currency.from_str("USDT")
             current_balance = float(account.balance_total(base_currency))
 
@@ -2033,15 +2135,18 @@ class HedgeGridV1(Strategy):
                 return
 
             # Update peak balance
-            if current_balance > self._peak_balance:
-                self._peak_balance = current_balance
+            self._peak_balance = max(current_balance, self._peak_balance)
 
             # Calculate drawdown percentage
             if self._peak_balance > 0:
                 drawdown_pct = ((self._peak_balance - current_balance) / self._peak_balance) * 100
 
                 # Check against limit (default 20%)
-                max_drawdown_pct = getattr(self._hedge_grid_config, 'max_drawdown_pct', 20.0) if self._hedge_grid_config else 20.0
+                max_drawdown_pct = (
+                    getattr(self._hedge_grid_config, "max_drawdown_pct", 20.0)
+                    if self._hedge_grid_config
+                    else 20.0
+                )
 
                 if drawdown_pct > max_drawdown_pct and not self._drawdown_protection_triggered:
                     self.log.critical(

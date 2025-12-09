@@ -73,7 +73,7 @@ class OptimizationResultsDB:
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 timeout=30.0,
-                isolation_level="IMMEDIATE"
+                isolation_level="DEFERRED",  # Better concurrency than IMMEDIATE
             )
             self._local.conn.row_factory = sqlite3.Row
 
@@ -188,65 +188,80 @@ class OptimizationResultsDB:
                 total_ret = metrics.get("total_return_pct")
 
                 # Insert trial
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO trials (
                         study_name, parameters, metrics, score, is_valid,
                         violations, timestamp, duration_seconds, error_message,
                         sharpe_ratio, profit_factor, calmar_ratio, max_drawdown_pct,
                         total_trades, win_rate_pct, total_return_pct
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    trial.study_name,
-                    json.dumps(trial.parameters),
-                    json.dumps(trial.metrics),
-                    trial.score,
-                    trial.is_valid,
-                    json.dumps(trial.violations) if trial.violations else None,
-                    trial.timestamp,
-                    trial.duration_seconds,
-                    trial.error_message,
-                    sharpe, profit, calmar, max_dd, trades, win_rate, total_ret
-                ))
+                """,
+                    (
+                        trial.study_name,
+                        json.dumps(trial.parameters),
+                        json.dumps(trial.metrics),
+                        trial.score,
+                        trial.is_valid,
+                        json.dumps(trial.violations) if trial.violations else None,
+                        trial.timestamp,
+                        trial.duration_seconds,
+                        trial.error_message,
+                        sharpe,
+                        profit,
+                        calmar,
+                        max_dd,
+                        trades,
+                        win_rate,
+                        total_ret,
+                    ),
+                )
 
                 trial_id = cursor.lastrowid
 
                 # Update study metadata
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO studies (name, total_trials, best_score)
                     VALUES (?, 1, ?)
                     ON CONFLICT(name) DO UPDATE SET
                         updated_at = CURRENT_TIMESTAMP,
                         total_trials = total_trials + 1,
                         best_score = MAX(best_score, excluded.best_score)
-                """, (trial.study_name, trial.score))
+                """,
+                    (trial.study_name, trial.score),
+                )
 
                 # Update best params if this is the best trial
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT score FROM best_params WHERE study_name = ?
-                """, (trial.study_name,))
+                """,
+                    (trial.study_name,),
+                )
 
                 row = cursor.fetchone()
                 if row is None or trial.score > row[0]:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         INSERT OR REPLACE INTO best_params
                         (study_name, parameters, metrics, score, trial_id)
                         VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        trial.study_name,
-                        json.dumps(trial.parameters),
-                        json.dumps(trial.metrics),
-                        trial.score,
-                        trial_id
-                    ))
+                    """,
+                        (
+                            trial.study_name,
+                            json.dumps(trial.parameters),
+                            json.dumps(trial.metrics),
+                            trial.score,
+                            trial_id,
+                        ),
+                    )
 
                 conn.commit()
                 return trial_id
 
     def get_best_trials(
-        self,
-        study_name: str,
-        n: int = 10,
-        only_valid: bool = True
+        self, study_name: str, n: int = 10, only_valid: bool = True
     ) -> list[dict[str, Any]]:
         """
         Get top N best trials for a study.
@@ -270,7 +285,8 @@ class OptimizationResultsDB:
 
             validity_filter = "AND is_valid = 1" if only_valid else ""
 
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 SELECT
                     id, parameters, metrics, score, is_valid,
                     violations, timestamp, duration_seconds,
@@ -280,20 +296,24 @@ class OptimizationResultsDB:
                 WHERE study_name = ? {validity_filter}
                 ORDER BY score DESC
                 LIMIT ?
-            """, (study_name, n))
+            """,
+                (study_name, n),
+            )
 
             trials = []
             for row in cursor.fetchall():
-                trials.append({
-                    "id": row["id"],
-                    "parameters": json.loads(row["parameters"]),
-                    "metrics": json.loads(row["metrics"]),
-                    "score": row["score"],
-                    "is_valid": bool(row["is_valid"]),
-                    "violations": json.loads(row["violations"]) if row["violations"] else [],
-                    "timestamp": row["timestamp"],
-                    "duration_seconds": row["duration_seconds"],
-                })
+                trials.append(
+                    {
+                        "id": row["id"],
+                        "parameters": json.loads(row["parameters"]),
+                        "metrics": json.loads(row["metrics"]),
+                        "score": row["score"],
+                        "is_valid": bool(row["is_valid"]),
+                        "violations": json.loads(row["violations"]) if row["violations"] else [],
+                        "timestamp": row["timestamp"],
+                        "duration_seconds": row["duration_seconds"],
+                    }
+                )
 
             return trials
 
@@ -314,10 +334,13 @@ class OptimizationResultsDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT parameters FROM best_params
                 WHERE study_name = ?
-            """, (study_name,))
+            """,
+                (study_name,),
+            )
 
             row = cursor.fetchone()
             if row:
@@ -376,16 +399,20 @@ class OptimizationResultsDB:
             cursor = conn.cursor()
 
             # Get study metadata
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM studies WHERE name = ?
-            """, (study_name,))
+            """,
+                (study_name,),
+            )
 
             study_row = cursor.fetchone()
             if not study_row:
                 return {"error": f"Study {study_name} not found"}
 
             # Get trial statistics
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT
                     COUNT(*) as total_trials,
                     COUNT(CASE WHEN is_valid = 1 THEN 1 END) as valid_trials,
@@ -397,7 +424,9 @@ class OptimizationResultsDB:
                     AVG(max_drawdown_pct) as avg_drawdown
                 FROM trials
                 WHERE study_name = ?
-            """, (study_name,))
+            """,
+                (study_name,),
+            )
 
             stats_row = cursor.fetchone()
 
@@ -432,21 +461,27 @@ class OptimizationResultsDB:
                 cursor = conn.cursor()
 
                 # Get IDs of trials to keep
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT id FROM trials
                     WHERE study_name = ?
                     ORDER BY score DESC
                     LIMIT ?
-                """, (study_name, keep_top_n))
+                """,
+                    (study_name, keep_top_n),
+                )
 
                 keep_ids = [row[0] for row in cursor.fetchall()]
 
                 if keep_ids:
                     # Delete trials not in keep list
                     placeholders = ",".join("?" * len(keep_ids))
-                    cursor.execute(f"""
+                    cursor.execute(
+                        f"""
                         DELETE FROM trials
                         WHERE study_name = ? AND id NOT IN ({placeholders})
-                    """, [study_name] + keep_ids)
+                    """,
+                        [study_name] + keep_ids,
+                    )
 
                 conn.commit()

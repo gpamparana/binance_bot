@@ -1,7 +1,6 @@
 """Tests for parameter space definition and sampling."""
 
 import optuna
-import pytest
 
 from naut_hedgegrid.optimization.param_space import ParameterBounds, ParameterSpace
 
@@ -38,9 +37,7 @@ class TestParameterSpace:
 
     def test_custom_bounds(self):
         """Test parameter space with custom bounds."""
-        custom = {
-            "GRID_STEP_BPS": ParameterBounds(min_value=20, max_value=100, step=10)
-        }
+        custom = {"GRID_STEP_BPS": ParameterBounds(min_value=20, max_value=100, step=10)}
         space = ParameterSpace(custom_bounds=custom)
         assert space.custom_bounds == custom
 
@@ -89,12 +86,12 @@ class TestParameterSpace:
             trial = study.ask()
             params = space.suggest_parameters(trial)
 
-            # Check grid ranges
-            assert 10 <= params["grid"]["grid_step_bps"] <= 200
-            assert 3 <= params["grid"]["grid_levels_long"] <= 20
-            assert 3 <= params["grid"]["grid_levels_short"] <= 20
-            assert 0.001 <= params["grid"]["base_qty"] <= 0.1
-            assert 1.0 <= params["grid"]["qty_scale"] <= 1.5
+            # Check grid ranges (updated to match param_space.py bounds)
+            assert 25 <= params["grid"]["grid_step_bps"] <= 100
+            assert 5 <= params["grid"]["grid_levels_long"] <= 10
+            assert 5 <= params["grid"]["grid_levels_short"] <= 10
+            assert 0.001 <= params["grid"]["base_qty"] <= 0.005
+            assert 1.0 <= params["grid"]["qty_scale"] <= 1.1
 
             # Check exit ranges
             assert 1 <= params["exit"]["tp_steps"] <= 10
@@ -142,8 +139,8 @@ class TestParameterSpace:
                 "grid_step_bps": 50.0,
                 "grid_levels_long": 10,
                 "grid_levels_short": 10,
-                "base_qty": 0.01,
-                "qty_scale": 1.2,
+                "base_qty": 0.003,
+                "qty_scale": 1.05,
             },
             "exit": {
                 "tp_steps": 2,
@@ -174,7 +171,7 @@ class TestParameterSpace:
         invalid_params = {
             "grid": {
                 "grid_step_bps": 2.0,  # Too small
-                "qty_scale": 1.2,
+                "qty_scale": 1.05,
             },
             "exit": {"tp_steps": 2, "sl_steps": 5},
             "regime": {"ema_fast": 21, "ema_slow": 50},
@@ -190,7 +187,7 @@ class TestParameterSpace:
         invalid_params = {
             "grid": {
                 "grid_step_bps": 50.0,
-                "qty_scale": 1.2,
+                "qty_scale": 1.05,
             },
             "exit": {"tp_steps": 2, "sl_steps": 5},
             "regime": {
@@ -209,7 +206,7 @@ class TestParameterSpace:
         invalid_params = {
             "grid": {
                 "grid_step_bps": 50.0,
-                "qty_scale": 1.2,
+                "qty_scale": 1.05,
             },
             "exit": {
                 "tp_steps": 20,  # More than 3x SL

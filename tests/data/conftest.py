@@ -36,17 +36,39 @@ def sample_trades_df():
 @pytest.fixture
 def sample_mark_prices_df():
     """
-    Sample valid mark price DataFrame.
+    Sample valid mark price DataFrame (simple format).
 
     Returns
     -------
     pd.DataFrame
-        Valid mark price data with all required columns
+        Valid mark price data with timestamp and mark_price columns
     """
     return pd.DataFrame(
         {
             "timestamp": pd.to_datetime(["2024-01-01 00:00:00", "2024-01-01 00:00:05"], utc=True),
             "mark_price": [50001.0, 50002.0],
+        }
+    )
+
+
+@pytest.fixture
+def sample_mark_prices_ohlcv_df():
+    """
+    Sample valid mark price OHLCV DataFrame for bar conversion.
+
+    Returns
+    -------
+    pd.DataFrame
+        Valid mark price OHLCV data for pipeline bar conversion
+    """
+    return pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2024-01-01 00:00:00", "2024-01-01 00:01:00"], utc=True),
+            "open": [50000.0, 50001.0],
+            "high": [50010.0, 50012.0],
+            "low": [49990.0, 49995.0],
+            "close": [50001.0, 50002.0],
+            "volume": [100.0, 150.0],
         }
     )
 

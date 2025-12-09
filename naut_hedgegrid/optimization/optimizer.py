@@ -13,17 +13,24 @@ from typing import Any
 
 import optuna
 import yaml
+from nautilus_trader.model.enums import OmsType, OrderStatus
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
-
-from nautilus_trader.model.enums import OmsType, OrderStatus
 
 from naut_hedgegrid.config.backtest import BacktestConfigLoader
 from naut_hedgegrid.config.strategy import HedgeGridConfigLoader
-from naut_hedgegrid.metrics.report import PerformanceMetrics, ReportGenerator
+from naut_hedgegrid.metrics.report import PerformanceMetrics
 from naut_hedgegrid.optimization.constraints import ConstraintsValidator, ConstraintThresholds
 from naut_hedgegrid.optimization.objective import MultiObjectiveFunction, ObjectiveWeights
 from naut_hedgegrid.optimization.param_space import ParameterSpace
@@ -89,7 +96,7 @@ class StrategyOptimizer:
         objective_weights: ObjectiveWeights | None = None,
         constraint_thresholds: ConstraintThresholds | None = None,
         storage: str | None = None,
-        verbose: bool = True
+        verbose: bool = True,
     ):
         """
         Initialize strategy optimizer.
@@ -174,9 +181,13 @@ class StrategyOptimizer:
             Completed Optuna study with results
         """
         if self.verbose and self.console:
-            self.console.print("\n[bold cyan]═══════════════════════════════════════════[/bold cyan]")
+            self.console.print(
+                "\n[bold cyan]═══════════════════════════════════════════[/bold cyan]"
+            )
             self.console.print("[bold cyan]     Parameter Optimization Started[/bold cyan]")
-            self.console.print("[bold cyan]═══════════════════════════════════════════[/bold cyan]\n")
+            self.console.print(
+                "[bold cyan]═══════════════════════════════════════════[/bold cyan]\n"
+            )
             self.console.print(f"[dim]Study Name:[/dim] {self.study_name}")
             self.console.print(f"[dim]Total Trials:[/dim] {self.n_trials}")
             self.console.print(f"[dim]Parallel Jobs:[/dim] {self.n_jobs}")
@@ -190,7 +201,7 @@ class StrategyOptimizer:
             sampler=TPESampler(seed=42, n_startup_trials=10),
             pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=0),
             storage=self.storage,
-            load_if_exists=True
+            load_if_exists=True,
         )
 
         # Suppress Optuna's default logging
@@ -217,7 +228,9 @@ class StrategyOptimizer:
 
                 if metrics is None:
                     if self.verbose and self.console:
-                        self.console.print(f"[red]✗ Trial {self.total_trials_run}: Backtest failed[/red]")
+                        self.console.print(
+                            f"[red]✗ Trial {self.total_trials_run}: Backtest failed[/red]"
+                        )
                     return float("-inf")
 
                 # Validate constraints
@@ -230,14 +243,13 @@ class StrategyOptimizer:
                 # Update tracking
                 if is_valid:
                     self.valid_trials += 1
-                if score > self.best_score:
-                    self.best_score = score
+                self.best_score = max(score, self.best_score)
 
                 # Store validation result in Optuna trial for later access
-                trial.set_user_attr('is_valid', is_valid)
-                trial.set_user_attr('total_trades', metrics.total_trades)
-                trial.set_user_attr('sharpe_ratio', metrics.sharpe_ratio)
-                trial.set_user_attr('win_rate_pct', metrics.win_rate_pct)
+                trial.set_user_attr("is_valid", is_valid)
+                trial.set_user_attr("total_trades", metrics.total_trades)
+                trial.set_user_attr("sharpe_ratio", metrics.sharpe_ratio)
+                trial.set_user_attr("win_rate_pct", metrics.win_rate_pct)
 
                 # Save trial to database
                 trial_data = OptimizationTrial(
@@ -248,13 +260,15 @@ class StrategyOptimizer:
                     is_valid=is_valid,
                     violations=violations,
                     timestamp=trial_start,
-                    duration_seconds=(datetime.now() - trial_start).total_seconds()
+                    duration_seconds=(datetime.now() - trial_start).total_seconds(),
                 )
                 self.results_db.save_trial(trial_data)
 
                 # Log trial result (only significant ones or invalid)
                 if self.verbose and self.console:
-                    self._log_trial_result_compact(self.total_trials_run, metrics, score, is_valid, violations)
+                    self._log_trial_result_compact(
+                        self.total_trials_run, metrics, score, is_valid, violations
+                    )
 
                 return score
 
@@ -269,12 +283,14 @@ class StrategyOptimizer:
                     violations=[],
                     timestamp=trial_start,
                     duration_seconds=(datetime.now() - trial_start).total_seconds(),
-                    error_message=str(e)
+                    error_message=str(e),
                 )
                 self.results_db.save_trial(trial_data)
 
                 if self.verbose and self.console:
-                    self.console.print(f"[red]✗ Trial {self.total_trials_run} ERROR: {str(e)[:80]}[/red]")
+                    self.console.print(
+                        f"[red]✗ Trial {self.total_trials_run} ERROR: {str(e)[:80]}[/red]"
+                    )
 
                 return float("-inf")
 
@@ -289,11 +305,10 @@ class StrategyOptimizer:
                     TimeElapsedColumn(),
                     TimeRemainingColumn(),
                     console=self.console,
-                    transient=False
+                    transient=False,
                 ) as progress:
                     task = progress.add_task(
-                        f"[cyan]Optimizing ({self.n_trials} trials)",
-                        total=self.n_trials
+                        f"[cyan]Optimizing ({self.n_trials} trials)", total=self.n_trials
                     )
 
                     def callback(study, trial):
@@ -301,22 +316,19 @@ class StrategyOptimizer:
                         progress.update(
                             task,
                             advance=1,
-                            description=f"[cyan]Trial {self.total_trials_run}/{self.n_trials} | Best: {self.best_score:.4f} | Valid: {self.valid_trials}/{self.total_trials_run}"
+                            description=f"[cyan]Trial {self.total_trials_run}/{self.n_trials} | Best: {self.best_score:.4f} | Valid: {self.valid_trials}/{self.total_trials_run}",
                         )
 
                     study.optimize(
                         objective,
                         n_trials=self.n_trials,
-                        n_jobs=1,
+                        n_jobs=self.n_jobs,
                         show_progress_bar=False,
-                        callbacks=[callback]
+                        callbacks=[callback],
                     )
             else:
                 study.optimize(
-                    objective,
-                    n_trials=self.n_trials,
-                    n_jobs=1,
-                    show_progress_bar=False
+                    objective, n_trials=self.n_trials, n_jobs=self.n_jobs, show_progress_bar=False
                 )
 
         except KeyboardInterrupt:
@@ -333,9 +345,7 @@ class StrategyOptimizer:
         return study
 
     def _run_backtest_with_parameters(
-        self,
-        trial_id: int,
-        parameters: dict[str, Any]
+        self, trial_id: int, parameters: dict[str, Any]
     ) -> PerformanceMetrics | None:
         """
         Run backtest with given parameters.
@@ -364,10 +374,7 @@ class StrategyOptimizer:
 
             # Create temporary strategy config with trial parameters
             with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".yaml",
-                prefix=f"trial_{trial_id}_",
-                delete=False
+                mode="w", suffix=".yaml", prefix=f"trial_{trial_id}_", delete=False
             ) as temp_config:
                 # Load base config
                 with open(self.base_strategy_config_path) as f:
@@ -397,13 +404,12 @@ class StrategyOptimizer:
             strategy_config = HedgeGridV1Config(
                 instrument_id=temp_hedge_grid_cfg.strategy.instrument_id,
                 hedge_grid_config_path=str(temp_config_path),
-                oms_type=OmsType.HEDGING
+                oms_type=OmsType.HEDGING,
             )
 
             # Run backtest
             runner = BacktestRunner(
-                backtest_config=self.backtest_config,
-                strategy_configs=[strategy_config]
+                backtest_config=self.backtest_config, strategy_configs=[strategy_config]
             )
 
             try:
@@ -448,7 +454,7 @@ class StrategyOptimizer:
 
                     # Calculate from closed positions
                     for pos in positions:
-                        if hasattr(pos, 'realized_pnl') and pos.realized_pnl:
+                        if hasattr(pos, "realized_pnl") and pos.realized_pnl:
                             pnl = float(pos.realized_pnl.as_double())
                             total_realized_pnl += pnl
                             if pnl > 0:
@@ -460,17 +466,19 @@ class StrategyOptimizer:
                     # If no closed positions but we have fills, estimate from orders
                     if len(positions) == 0 and total_trades > 0:
                         # Estimate win rate from filled orders (grid trading typically has 50-70% win rate)
-                        winning_trades = int(total_trades * 0.6)  # Assume 60% win rate for grid trading
+                        winning_trades = int(
+                            total_trades * 0.6
+                        )  # Assume 60% win rate for grid trading
 
                     # Get unrealized PnL from open positions
                     total_unrealized_pnl = 0.0
                     try:
                         # Sum unrealized PnL from all open positions
                         for pos in open_positions:
-                            if hasattr(pos, 'unrealized_pnl') and pos.unrealized_pnl:
+                            if hasattr(pos, "unrealized_pnl") and pos.unrealized_pnl:
                                 unrealized = float(pos.unrealized_pnl.as_double())
                                 total_unrealized_pnl += unrealized
-                    except Exception as e:
+                    except Exception:
                         # Fallback: try to get from portfolio balance changes
                         try:
                             account = portfolio.account(self.backtest_config.venues[0].venue)
@@ -478,9 +486,11 @@ class StrategyOptimizer:
                                 # Get balance changes
                                 balances = account.balances()
                                 for balance in balances.values():
-                                    if hasattr(balance, 'total') and hasattr(balance, 'free'):
+                                    if hasattr(balance, "total") and hasattr(balance, "free"):
                                         # Unrealized = total - free (locked in positions)
-                                        total_unrealized_pnl += float(balance.total.as_double()) - 10000.0  # Starting capital
+                                        total_unrealized_pnl += (
+                                            float(balance.total.as_double()) - 10000.0
+                                        )  # Starting capital
                                         break
                         except:
                             total_unrealized_pnl = 0.0
@@ -496,7 +506,14 @@ class StrategyOptimizer:
                     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
 
                     # Calculate profit factor
-                    profit_factor = (total_win / total_loss) if total_loss > 0 else 0.0
+                    # If no losses: infinity (use large number for numerical stability)
+                    # If no wins: 0
+                    if total_loss > 0:
+                        profit_factor = total_win / total_loss
+                    elif total_win > 0:
+                        profit_factor = 100.0  # Effectively infinite (capped for stability)
+                    else:
+                        profit_factor = 0.0
 
                     # Estimate max drawdown (conservative)
                     # Use unrealized PnL as proxy if negative
@@ -511,7 +528,9 @@ class StrategyOptimizer:
                     if total_trades >= 5:  # Need at least 5 trades for meaningful Sharpe
                         # Estimate volatility from drawdown (rough approximation)
                         # Typical relationship: volatility ≈ max_dd / 2
-                        estimated_volatility = max_drawdown / 2.0 if max_drawdown > 0 else 20.0  # Default 20% vol
+                        estimated_volatility = (
+                            max_drawdown / 2.0 if max_drawdown > 0 else 20.0
+                        )  # Default 20% vol
 
                         # Annualize return for 1 month of data (multiply by 12)
                         annualized_return = total_return_pct * 12
@@ -519,7 +538,12 @@ class StrategyOptimizer:
                         # Sharpe = annualized_return / annualized_volatility
                         # For crypto, we can ignore risk-free rate (or use 5% annual)
                         risk_free_annual = 5.0
-                        sharpe = (annualized_return - risk_free_annual) / (estimated_volatility * math.sqrt(12)) if estimated_volatility > 0 else 0.0
+                        sharpe = (
+                            (annualized_return - risk_free_annual)
+                            / (estimated_volatility * math.sqrt(12))
+                            if estimated_volatility > 0
+                            else 0.0
+                        )
 
                         # Cap Sharpe ratio to reasonable bounds [-3, 3] for optimization stability
                         sharpe = max(-3.0, min(3.0, sharpe))
@@ -538,49 +562,44 @@ class StrategyOptimizer:
                         total_pnl=total_pnl,
                         total_return_pct=total_return_pct,
                         annualized_return_pct=0.0,
-
                         # Risk metrics
                         sharpe_ratio=sharpe,
                         sortino_ratio=0.0,
                         calmar_ratio=calmar,
                         max_drawdown_pct=max_drawdown,
                         max_drawdown_duration_days=0.0,
-
                         # Trade metrics
                         total_trades=total_trades,
                         winning_trades=winning_trades,
                         losing_trades=total_trades - winning_trades,
                         win_rate_pct=win_rate,
                         avg_win=total_win / winning_trades if winning_trades > 0 else 0,
-                        avg_loss=total_loss / (total_trades - winning_trades) if (total_trades - winning_trades) > 0 else 0,
+                        avg_loss=total_loss / (total_trades - winning_trades)
+                        if (total_trades - winning_trades) > 0
+                        else 0,
                         profit_factor=profit_factor,
                         avg_trade_pnl=(total_pnl / total_trades) if total_trades > 0 else 0,
-
                         # Execution metrics
                         maker_fill_ratio=0.0,
                         avg_slippage_bps=0.0,
                         total_fees_paid=0.0,
-
                         # Funding metrics
                         funding_paid=0.0,
                         funding_received=0.0,
                         net_funding_pnl=0.0,
-
                         # Exposure metrics
                         avg_long_exposure=0.0,
                         avg_short_exposure=0.0,
                         max_long_exposure=0.0,
                         max_short_exposure=0.0,
                         time_in_market_pct=0.0,
-
                         # Ladder metrics
                         avg_ladder_depth_long=0.0,
                         avg_ladder_depth_short=0.0,
                         ladder_fill_rate_pct=0.0,
-
                         # MAE/MFE
                         avg_mae_pct=0.0,
-                        avg_mfe_pct=0.0
+                        avg_mfe_pct=0.0,
                     )
 
                     return metrics
@@ -593,14 +612,12 @@ class StrategyOptimizer:
                         total_pnl=0.0,
                         total_return_pct=0.0,
                         annualized_return_pct=0.0,
-
                         # Risk metrics
                         sharpe_ratio=0.0,
                         sortino_ratio=0.0,
                         calmar_ratio=0.0,
                         max_drawdown_pct=100.0,  # Worst case
                         max_drawdown_duration_days=0.0,
-
                         # Trade metrics
                         total_trades=0,
                         winning_trades=0,
@@ -610,38 +627,83 @@ class StrategyOptimizer:
                         avg_loss=0.0,
                         profit_factor=0.0,
                         avg_trade_pnl=0.0,
-
                         # Execution metrics
                         maker_fill_ratio=0.0,
                         avg_slippage_bps=0.0,
                         total_fees_paid=0.0,
-
                         # Funding metrics
                         funding_paid=0.0,
                         funding_received=0.0,
                         net_funding_pnl=0.0,
-
                         # Exposure metrics
                         avg_long_exposure=0.0,
                         avg_short_exposure=0.0,
                         max_long_exposure=0.0,
                         max_short_exposure=0.0,
                         time_in_market_pct=0.0,
-
                         # Ladder metrics
                         avg_ladder_depth_long=0.0,
                         avg_ladder_depth_short=0.0,
                         ladder_fill_rate_pct=0.0,
-
                         # MAE/MFE
                         avg_mae_pct=0.0,
-                        avg_mfe_pct=0.0
+                        avg_mfe_pct=0.0,
                     )
             return None
 
         except Exception as e:
             logging.exception(f"Backtest failed for trial {trial_id}: {e}")
             return None
+
+    def _organize_flat_params(self, flat_params: dict[str, Any]) -> dict[str, Any]:
+        """
+        Organize flat parameters dict into nested structure for config YAML.
+
+        Parameters
+        ----------
+        flat_params : dict
+            Flat parameter dictionary from Optuna trial (e.g., {'grid_step_bps': 50, ...})
+
+        Returns
+        -------
+        dict
+            Nested structure matching HedgeGridConfig sections
+        """
+        return {
+            "grid": {
+                "grid_step_bps": flat_params.get("grid_step_bps"),
+                "grid_levels_long": flat_params.get("grid_levels_long"),
+                "grid_levels_short": flat_params.get("grid_levels_short"),
+                "base_qty": flat_params.get("base_qty"),
+                "qty_scale": flat_params.get("qty_scale"),
+            },
+            "exit": {
+                "tp_steps": flat_params.get("tp_steps"),
+                "sl_steps": flat_params.get("sl_steps"),
+            },
+            "regime": {
+                "adx_len": flat_params.get("adx_len"),
+                "ema_fast": flat_params.get("ema_fast"),
+                "ema_slow": flat_params.get("ema_slow"),
+                "atr_len": flat_params.get("atr_len"),
+                "hysteresis_bps": flat_params.get("hysteresis_bps"),
+            },
+            "policy": {
+                "strategy": "throttled-counter",  # Fixed for optimization
+                "counter_levels": flat_params.get("counter_levels"),
+                "counter_qty_scale": flat_params.get("counter_qty_scale"),
+            },
+            "rebalance": {
+                "recenter_trigger_bps": flat_params.get("recenter_trigger_bps"),
+            },
+            "funding": {
+                "funding_window_minutes": 480,  # Fixed at 8 hours
+                "funding_max_cost_bps": flat_params.get("funding_max_cost_bps"),
+            },
+            "position": {
+                "max_position_pct": flat_params.get("max_position_pct"),
+            },
+        }
 
     def _metrics_to_dict(self, metrics: PerformanceMetrics) -> dict[str, float]:
         """Convert PerformanceMetrics to dictionary."""
@@ -664,7 +726,7 @@ class StrategyOptimizer:
         metrics: PerformanceMetrics,
         score: float,
         is_valid: bool,
-        violations: list[str]
+        violations: list[str],
     ):
         """Log trial result in compact format (only show important trials)."""
         if not self.console:
@@ -690,9 +752,7 @@ class StrategyOptimizer:
             violation_str = ", ".join(violations[:2])  # Show first 2 violations
             if len(violations) > 2:
                 violation_str += f" (+{len(violations) - 2} more)"
-            self.console.print(
-                f"{status} Trial {trial_number}: Invalid - {violation_str}"
-            )
+            self.console.print(f"{status} Trial {trial_number}: Invalid - {violation_str}")
 
     def _log_trial_result(
         self,
@@ -700,7 +760,7 @@ class StrategyOptimizer:
         metrics: PerformanceMetrics,
         score: float,
         is_valid: bool,
-        violations: list[str]
+        violations: list[str],
     ):
         """Log trial result to console (verbose mode)."""
         if not self.console:
@@ -739,7 +799,9 @@ class StrategyOptimizer:
         self.console.print(f"[bold green]Best Score:[/bold green] {best_trial.value:.4f}\n")
 
         # Show best parameters in a nice table
-        table = Table(title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta")
+        table = Table(
+            title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta"
+        )
         table.add_column("Parameter", style="cyan", no_wrap=True)
         table.add_column("Value", style="green", justify="right")
 
@@ -761,7 +823,7 @@ class StrategyOptimizer:
             stats_table.add_column("Metric", style="dim")
             stats_table.add_column("Value", style="bold")
 
-            stats_table.add_row("Total Trials", str(stats['total_trials']))
+            stats_table.add_row("Total Trials", str(stats["total_trials"]))
             stats_table.add_row("Valid Trials", f"[green]{stats['valid_trials']}[/green]")
             stats_table.add_row("Validity Rate", f"{stats['validity_rate']:.1%}")
             stats_table.add_row("Best Score", f"[bold green]{stats['best_score']:.4f}[/bold green]")
@@ -772,8 +834,10 @@ class StrategyOptimizer:
     def _save_best_parameters(self, study: optuna.Study):
         """Save best parameters to YAML file."""
         try:
-            # Get best parameters
-            best_params = self.param_space.suggest_parameters(study.best_trial)
+            # Get best parameters from FrozenTrial (already suggested, stored as flat dict)
+            # Reconstruct organized structure from flat params
+            flat_params = study.best_trial.params
+            best_params = self._organize_flat_params(flat_params)
 
             # Load base config
             with open(self.base_strategy_config_path) as f:

@@ -7,16 +7,15 @@ from typing import Any
 
 import pandas as pd
 import typer
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
-
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import InstrumentId, Venue
 from nautilus_trader.model.objects import Currency, Money
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
 from naut_hedgegrid.config.backtest import BacktestConfig, BacktestConfigLoader
 from naut_hedgegrid.config.strategy import HedgeGridConfigLoader
@@ -355,27 +354,27 @@ class BacktestRunner:
         """
         total_items = 0
 
-        if "bars" in data and data["bars"]:
+        if data.get("bars"):
             engine.add_data(data["bars"])
             total_items += len(data["bars"])
 
-        if "trade_ticks" in data and data["trade_ticks"]:
+        if data.get("trade_ticks"):
             engine.add_data(data["trade_ticks"])
             total_items += len(data["trade_ticks"])
 
-        if "quote_ticks" in data and data["quote_ticks"]:
+        if data.get("quote_ticks"):
             engine.add_data(data["quote_ticks"])
             total_items += len(data["quote_ticks"])
 
-        if "order_book_deltas" in data and data["order_book_deltas"]:
+        if data.get("order_book_deltas"):
             engine.add_data(data["order_book_deltas"])
             total_items += len(data["order_book_deltas"])
 
-        if "fundingratesing" in data and data["fundingratesing"]:
-            engine.add_data(data["fundingratesing"])
-            total_items += len(data["fundingratesing"])
+        if data.get("fundingrates"):
+            engine.add_data(data["fundingrates"])
+            total_items += len(data["fundingrates"])
 
-        if "markprices" in data and data["markprices"]:
+        if data.get("markprices"):
             engine.add_data(data["markprices"])
             total_items += len(data["markprices"])
 
@@ -445,8 +444,8 @@ class BacktestRunner:
 
         # Important: Properly dispose of the engine to ensure clean shutdown
         # This ensures all pending log messages are flushed before continuing
-        import time
         import sys
+        import time
 
         # Dispose the engine to trigger proper cleanup
         engine.dispose()
@@ -536,7 +535,9 @@ class BacktestRunner:
                 if order.status == OrderStatus.FILLED or order.filled_qty.as_double() > 0:
                     order_dict = {
                         "client_order_id": str(order.client_order_id),
-                        "venue_order_id": str(order.venue_order_id) if order.venue_order_id else None,
+                        "venue_order_id": str(order.venue_order_id)
+                        if order.venue_order_id
+                        else None,
                         "side": str(order.side),
                         "quantity": float(order.quantity.as_double()),
                         "filled_qty": float(order.filled_qty.as_double()),
@@ -555,10 +556,20 @@ class BacktestRunner:
                 unrealized = 0.0
                 if position.is_open:
                     # Get last price from position's last event or use closing price
-                    last_price = position.avg_px_close if position.avg_px_close else position.avg_px_open
+                    last_price = (
+                        position.avg_px_close if position.avg_px_close else position.avg_px_open
+                    )
                     try:
                         from nautilus_trader.model.objects import Price
-                        unrealized = float(position.unrealized_pnl(Price(last_price, precision=2)).as_double())
+
+                        # Get price precision from instrument (Phase 3.4 fix: don't hardcode precision)
+                        instrument = engine.cache.instrument(position.instrument_id)
+                        price_precision = instrument.price_precision if instrument else 2
+                        unrealized = float(
+                            position.unrealized_pnl(
+                                Price(last_price, precision=price_precision)
+                            ).as_double()
+                        )
                     except Exception:
                         unrealized = 0.0
 
@@ -815,7 +826,9 @@ def main(
 
             strat_config_path = Path(strat_config_entry.config_path)
             if not strat_config_path.exists():
-                console.print(f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]")
+                console.print(
+                    f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]"
+                )
                 continue
 
             # Load HedgeGridConfig

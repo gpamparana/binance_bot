@@ -249,31 +249,52 @@ class MockDataSource(DataSource):
     @staticmethod
     def _generate_sample_marks(num_rows: int = 100) -> pd.DataFrame:
         """
-        Generate realistic sample mark price data.
+        Generate realistic sample mark price OHLCV bar data.
 
         Parameters
         ----------
         num_rows : int, default 100
-            Number of mark prices to generate
+            Number of mark price bars to generate
 
         Returns
         -------
         pd.DataFrame
-            Generated mark price data
+            Generated mark price OHLCV data for bar conversion
         """
         np.random.seed(43)
+
+        # Handle empty data
+        if num_rows == 0:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
         timestamps = pd.date_range("2024-01-01", periods=num_rows, freq="60s", tz="UTC")
 
         # Mark prices closely track spot with small premium/discount
         base_price = 50000.0
         price_changes = np.random.normal(0, 5, num_rows)
-        mark_prices = base_price + np.cumsum(price_changes)
+        closes = base_price + np.cumsum(price_changes)
+
+        # Generate OHLCV data from closes
+        # Open is previous close (or same for first bar)
+        opens = np.roll(closes, 1)
+        opens[0] = closes[0]
+
+        # High/Low are within a small range of close
+        volatility = np.abs(np.random.normal(0, 10, num_rows))
+        highs = np.maximum(opens, closes) + volatility
+        lows = np.minimum(opens, closes) - volatility
+
+        # Volume (synthetic)
+        volumes = np.random.exponential(100, num_rows)
 
         return pd.DataFrame(
             {
                 "timestamp": timestamps,
-                "mark_price": mark_prices,
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes,
             }
         )
 
