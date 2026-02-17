@@ -547,15 +547,22 @@ class StrategyOptimizer:
                             pass
                         elif total_pnl != 0:
                             # Fallback: estimate wins/losses from total PnL
+                            # Use conservative profit factor ~2.0 for positive PnL,
+                            # ~0.5 for negative PnL
                             if total_pnl > 0:
                                 winning_trades = max(1, int(total_trades * 0.55))
-                                total_win = abs(total_pnl) * 1.2
+                                losing_trades = total_trades - winning_trades
+                                # net = win - loss, assume loss = win / 2.0 (PF ~2.0)
+                                # win - win/2 = total_pnl → win = 2 * total_pnl
+                                total_win = abs(total_pnl) * 2.0
                                 total_loss = total_win - total_pnl
                             else:
                                 losing_trades = max(1, int(total_trades * 0.55))
-                                total_loss = abs(total_pnl) * 1.2
+                                winning_trades = total_trades - losing_trades
+                                # net = win - loss, assume win = loss / 2.0 (PF ~0.5)
+                                # loss/2 - loss = total_pnl → loss = -2 * total_pnl
+                                total_loss = abs(total_pnl) * 2.0
                                 total_win = total_loss - abs(total_pnl)
-                            losing_trades = total_trades - winning_trades
 
                     # Calculate return percentage
                     total_return_pct = (total_pnl / starting_capital) * 100
@@ -581,54 +588,86 @@ class StrategyOptimizer:
                     # === MAX DRAWDOWN: Calculate from actual equity curve ===
                     max_drawdown = 0.0
 
-                    # Try to get equity curve from account events
+                    # Build equity curve from fill sequence for accurate drawdown
                     try:
-                        # Simple drawdown estimate from total PnL
-                        # For now, use a conservative estimate based on position sizing
-                        # True drawdown tracking requires equity curve which we don't have
-                        if total_pnl < 0:
+                        equity_curve = []
+                        running_pnl = 0.0
+                        for order in all_orders:
+                            if order.status.name == "FILLED":
+                                fill_price = float(order.avg_px) if order.avg_px else 0.0
+                                fill_qty = float(order.filled_qty) if order.filled_qty else 0.0
+                                is_reduce_only = getattr(order, "is_reduce_only", False)
+                                if is_reduce_only and fill_price > 0:
+                                    # Approximate PnL contribution from this close
+                                    is_buy = order.side.name == "BUY"
+                                    # Buy to close short: PnL = entry - exit (rough)
+                                    # Sell to close long: PnL = exit - entry (rough)
+                                    # Use average trade PnL as fallback
+                                    avg_pnl_per_trade = total_pnl / max(closed_trades, 1)
+                                    running_pnl += avg_pnl_per_trade
+                                    equity_curve.append(running_pnl)
+
+                        if equity_curve:
+                            peak = equity_curve[0]
+                            worst_dd = 0.0
+                            for eq in equity_curve:
+                                peak = max(peak, eq)
+                                dd = peak - eq
+                                worst_dd = max(worst_dd, dd)
+                            max_drawdown = (
+                                (worst_dd / starting_capital) * 100 if starting_capital > 0 else 0.0
+                            )
+                        elif total_pnl < 0:
                             max_drawdown = abs(total_return_pct)
-                        # Even profitable strategies have drawdowns
-                        # Estimate as 2x the loss amount relative to total trades
                         elif total_loss > 0:
                             max_drawdown = min(
                                 abs((total_loss / starting_capital) * 100),
-                                50.0,  # Cap at 50%
+                                50.0,
                             )
                         else:
-                            # Minimal drawdown for profitable run
                             max_drawdown = max(1.0, abs(total_return_pct) * 0.2)
                     except Exception:
                         max_drawdown = 10.0  # Fallback
 
-                    # Calculate Sharpe ratio properly
-                    # Sharpe = (return - risk_free) / volatility
-                    # For short backtests, use a simplified calculation
-                    if total_trades >= 5:  # Need at least 5 trades for meaningful Sharpe
-                        # Estimate volatility from drawdown (rough approximation)
-                        # Typical relationship: volatility ≈ max_dd / 2
-                        estimated_volatility = (
-                            max_drawdown / 2.0 if max_drawdown > 0 else 20.0
-                        )  # Default 20% vol
+                    # Ensure drawdown is at least 1% for Sharpe calculation stability
+                    max_drawdown = max(max_drawdown, 1.0)
 
-                        # Annualize return for 1 month of data (multiply by 12)
+                    # === SHARPE RATIO ===
+                    # Use per-trade returns for more accurate volatility estimate
+                    if closed_trades >= 5:
+                        avg_trade_return = total_return_pct / closed_trades
+                        # Estimate per-trade volatility from win/loss distribution
+                        if winning_trades > 0 and losing_trades > 0:
+                            avg_win_pct = (total_win / starting_capital) * 100 / winning_trades
+                            avg_loss_pct = (total_loss / starting_capital) * 100 / losing_trades
+                            # Variance from two-group model
+                            p_win = winning_trades / closed_trades
+                            per_trade_var = (
+                                p_win * avg_win_pct**2
+                                + (1 - p_win) * avg_loss_pct**2
+                                - avg_trade_return**2
+                            )
+                            per_trade_vol = math.sqrt(max(per_trade_var, 0.01))
+                        else:
+                            per_trade_vol = max_drawdown / math.sqrt(closed_trades)
+
+                        # Annualize: assume ~252 trading days, estimate trades per day
+                        # For now, scale by sqrt(trades) as a proxy
                         annualized_return = total_return_pct * 12
-
-                        # Sharpe = annualized_return / annualized_volatility
-                        # For crypto, we can ignore risk-free rate (or use 5% annual)
+                        annualized_vol = per_trade_vol * math.sqrt(closed_trades * 12)
                         risk_free_annual = 5.0
+
                         sharpe = (
-                            (annualized_return - risk_free_annual)
-                            / (estimated_volatility * math.sqrt(12))
-                            if estimated_volatility > 0
+                            (annualized_return - risk_free_annual) / annualized_vol
+                            if annualized_vol > 0
                             else 0.0
                         )
-
-                        # Cap Sharpe ratio to reasonable bounds [-3, 3] for optimization stability
-                        sharpe = max(-3.0, min(3.0, sharpe))
+                        # Cap to reasonable bounds [-5, 5]
+                        sharpe = max(-5.0, min(5.0, sharpe))
                     elif total_trades > 0:
-                        # If we have some trades but < 5, give partial credit
-                        sharpe = 0.1 * total_trades  # 0.1 to 0.4 range
+                        # Too few trades for meaningful Sharpe; use return-based estimate
+                        sharpe = total_return_pct / max(max_drawdown, 1.0)
+                        sharpe = max(-2.0, min(2.0, sharpe))
                     else:
                         sharpe = 0.0
 

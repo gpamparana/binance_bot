@@ -125,17 +125,20 @@ class FundingGuard:
     def _get_paying_side(self) -> Side:
         """Determine which side pays funding based on rate sign.
 
+        Uses Binance convention for funding rate sign:
+        - Positive rate: longs pay shorts (most common in bull markets)
+        - Negative rate: shorts pay longs (common in bear/low-interest markets)
+
         Returns:
             Side that pays funding:
-            - Negative rate (shorts pay longs) → SHORT
-            - Positive rate (longs pay shorts) → LONG
+            - Positive rate → LONG (longs pay)
+            - Negative rate → SHORT (shorts pay)
 
         """
         if self._current_rate is None:
             return Side.LONG  # Default, shouldn't reach here
 
-        # Negative rate: shorts pay longs → reduce SHORT exposure
-        # Positive rate: longs pay shorts → reduce LONG exposure
+        # Binance convention: positive rate = longs pay, negative rate = shorts pay
         return Side.SHORT if self._current_rate < 0 else Side.LONG
 
     def _scale_ladders(

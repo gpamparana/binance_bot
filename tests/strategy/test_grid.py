@@ -229,38 +229,20 @@ def test_sl_disabled() -> None:
 # Regime-Based Tests
 
 
-def test_up_regime_returns_short_ladder_only() -> None:
-    """Test UP regime returns only SHORT ladder."""
+def test_all_regimes_return_both_ladders() -> None:
+    """Test all regimes return both LONG and SHORT ladders.
+
+    GridEngine always returns both ladders. Regime-based throttling
+    is handled by PlacementPolicy in the orchestration pipeline.
+    """
     cfg = create_test_config()
     mid = 100.0
 
-    ladders = GridEngine.build_ladders(mid, cfg, Regime.UP)
-
-    assert len(ladders) == 1
-    assert ladders[0].side == Side.SHORT
-
-
-def test_down_regime_returns_long_ladder_only() -> None:
-    """Test DOWN regime returns only LONG ladder."""
-    cfg = create_test_config()
-    mid = 100.0
-
-    ladders = GridEngine.build_ladders(mid, cfg, Regime.DOWN)
-
-    assert len(ladders) == 1
-    assert ladders[0].side == Side.LONG
-
-
-def test_sideways_regime_returns_both_ladders() -> None:
-    """Test SIDEWAYS regime returns both ladders."""
-    cfg = create_test_config()
-    mid = 100.0
-
-    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
-
-    assert len(ladders) == 2
-    assert ladders[0].side == Side.LONG
-    assert ladders[1].side == Side.SHORT
+    for regime in [Regime.UP, Regime.DOWN, Regime.SIDEWAYS]:
+        ladders = GridEngine.build_ladders(mid, cfg, regime)
+        assert len(ladders) == 2, f"Expected 2 ladders for {regime}, got {len(ladders)}"
+        assert ladders[0].side == Side.LONG
+        assert ladders[1].side == Side.SHORT
 
 
 # Inventory Cap Tests

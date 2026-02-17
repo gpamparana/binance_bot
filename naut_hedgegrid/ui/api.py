@@ -16,6 +16,7 @@ Key Features:
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 import time
@@ -189,12 +190,16 @@ class StrategyAPI:
                 Should accept (operation: str, **kwargs) and return dict
             api_key: Optional API key for authentication (header: X-API-Key)
         """
-        self.strategy_callback = strategy_callback
+        self._raw_strategy_callback = strategy_callback
         self.api_key = api_key
         self.is_running = False
         self.server_thread: threading.Thread | None = None
         self.start_time = time.time()
         self._shutdown_event = threading.Event()
+        self._callback_timeout = 10.0  # seconds
+        self._callback_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="api-callback"
+        )
 
         # Create FastAPI app
         self.app = FastAPI(
@@ -216,6 +221,34 @@ class StrategyAPI:
         self._register_routes()
 
         logger.info("StrategyAPI initialized")
+
+    def strategy_callback(self, operation: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Execute strategy callback with timeout protection.
+
+        Prevents API endpoints from hanging indefinitely if the strategy
+        is stuck or unresponsive.
+
+        Args:
+            operation: Operation name to execute
+            kwargs: Keyword arguments for the operation
+
+        Returns:
+            Result dictionary from strategy
+
+        Raises:
+            HTTPException: If callback times out
+        """
+        try:
+            future = self._callback_executor.submit(self._raw_strategy_callback, operation, kwargs)
+            return future.result(timeout=self._callback_timeout)
+        except concurrent.futures.TimeoutError:
+            logger.error(
+                f"Strategy callback '{operation}' timed out after {self._callback_timeout}s"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"Strategy callback '{operation}' timed out",
+            ) from None
 
     def _validate_api_key(self, x_api_key: str | None = Header(None)) -> None:
         """Validate API key if authentication is enabled.

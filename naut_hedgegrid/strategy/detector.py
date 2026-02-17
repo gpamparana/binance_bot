@@ -82,11 +82,8 @@ class EMA:
                 self._value = sum(self._warmup_values) / self.period
                 self._is_warm = True
                 self._warmup_values.clear()
-        elif self._value is None:
-            # First calculation after warmup
-            self._value = price
         else:
-            # Standard EMA calculation
+            # Standard EMA calculation (after warmup, _value is always set to SMA)
             self._value = (price * self.multiplier) + (self._value * (1 - self.multiplier))
 
     def reset(self) -> None:

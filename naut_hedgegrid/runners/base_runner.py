@@ -16,7 +16,6 @@ from naut_hedgegrid.adapters.binance_testnet_patch import patch_binance_futures_
 
 patch_binance_futures_for_testnet()
 
-import os
 import signal
 import sys
 import threading
@@ -33,15 +32,17 @@ from nautilus_trader.adapters.binance import (
     BinanceLiveDataClientFactory,
     BinanceLiveExecClientFactory,
 )
-from nautilus_trader.config import InstrumentProviderConfig, TradingNodeConfig
+from nautilus_trader.config import (
+    ImportableStrategyConfig,
+    InstrumentProviderConfig,
+    TradingNodeConfig,
+)
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarSpecification, BarType
 from nautilus_trader.model.enums import AggregationSource, BarAggregation, OmsType, PriceType
 from nautilus_trader.model.identifiers import InstrumentId
 from rich.console import Console
 from rich.panel import Panel
-
-from nautilus_trader.config import ImportableStrategyConfig
 
 from naut_hedgegrid.config.strategy import HedgeGridConfig, HedgeGridConfigLoader
 from naut_hedgegrid.config.venue import VenueConfig, VenueConfigLoader
@@ -340,7 +341,6 @@ class BaseRunner(ABC):
             exec_engine=exec_engine_config,
         )
 
-
     def load_configs(
         self,
         strategy_config: str,
@@ -363,8 +363,9 @@ class BaseRunner(ABC):
         # Load strategy config
         strat_config_path = Path(strategy_config)
         if not strat_config_path.exists():
-            self.console.print(f"[red]Error: Strategy config not found: {strat_config_path}[/red]")
-            sys.exit(1)
+            msg = f"Strategy config not found: {strat_config_path}"
+            self.console.print(f"[red]Error: {msg}[/red]")
+            raise FileNotFoundError(msg)
 
         hedge_grid_cfg = HedgeGridConfigLoader.load(strat_config_path)
         self.console.print(f"[green]✓[/green] Strategy config: {strat_config_path.name}")
@@ -372,18 +373,18 @@ class BaseRunner(ABC):
         # Load venue config
         venue_config_path = Path(venue_config)
         if not venue_config_path.exists():
-            self.console.print(f"[red]Error: Venue config not found: {venue_config_path}[/red]")
-            sys.exit(1)
+            msg = f"Venue config not found: {venue_config_path}"
+            self.console.print(f"[red]Error: {msg}[/red]")
+            raise FileNotFoundError(msg)
 
         venue_cfg = VenueConfigLoader.load(venue_config_path)
         self.console.print(f"[green]✓[/green] Venue config: {venue_config_path.name}")
 
         # Validate venue
         if venue_cfg.venue.name != "BINANCE":
-            self.console.print(
-                f"[red]Error: Only BINANCE venue supported, got {venue_cfg.venue.name}[/red]"
-            )
-            sys.exit(1)
+            msg = f"Only BINANCE venue supported, got {venue_cfg.venue.name}"
+            self.console.print(f"[red]Error: {msg}[/red]")
+            raise ValueError(msg)
 
         return strat_config_path, hedge_grid_cfg, venue_config_path, venue_cfg
 
@@ -448,7 +449,8 @@ class BaseRunner(ABC):
                         "[yellow]Check that your .env file has the correct environment variables:[/yellow]"
                     )
                     self.console.print(f"[yellow]  Venue config: {venue_config_path.name}[/yellow]")
-                    sys.exit(1)
+                    msg = "API credentials not found in venue config"
+                    raise ValueError(msg)
                 self.console.print("[green]✓[/green] API credentials found in venue config")
             self.console.print()
 
@@ -572,7 +574,13 @@ class BaseRunner(ABC):
 
                     except Exception as e:  # noqa: BLE001
                         self.console.print(
-                            f"[yellow]Warning: Failed to start ops infrastructure: {e}[/yellow]"
+                            f"[red]Error: Failed to start ops infrastructure: {e}[/red]"
+                        )
+                        self.console.print(
+                            "[red]Strategy will run WITHOUT monitoring, kill switch, or API controls.[/red]"
+                        )
+                        self.console.print(
+                            "[yellow]Consider fixing the ops configuration or restarting.[/yellow]"
                         )
                         self.ops_manager = None
 

@@ -10,7 +10,7 @@ grid:
   grid_step_bps: 10.0  # Grid spacing in basis points (0.10%) - REDUCED from 25.0
   grid_levels_long: 15  # Number of long grid levels below mid - INCREASED from 10
   grid_levels_short: 15  # Number of short grid levels above mid - INCREASED from 10
-  base_qty: 0.001  # Base order quantity in BTC
+  base_qty: 0.002  # Base order quantity in BTC (~$136 at $68k, must exceed 100 USDT min notional)
   qty_scale: 1.05  # Quantity multiplier per level - REDUCED from 1.1 for more even distribution
 
 # Take Profit / Stop Loss - TIGHTER FOR TESTING

@@ -463,8 +463,6 @@ class KillSwitch:
                 self.logger.debug(f"Circuit breaker {breaker_type} already triggered today")
                 return
 
-            self._circuit_breakers_triggered.add(breaker_key)
-
         # Log circuit breaker trigger
         self.logger.critical(
             f"CIRCUIT BREAKER TRIGGERED: {breaker_type} - "
@@ -482,29 +480,42 @@ class KillSwitch:
 
         # Flatten positions
         reason = f"{breaker_type} circuit breaker triggered (current={current_value:.2f}{unit}, threshold={threshold:.2f}{unit})"
-        self.flatten_now("both", reason)
+        result = self.flatten_now("both", reason)
+
+        # Only mark as triggered after successful flatten (allows retry on failure)
+        if result.get("status") == "completed":
+            with self._lock:
+                self._circuit_breakers_triggered.add(breaker_key)
+        else:
+            self.logger.warning(
+                f"Flatten failed for {breaker_type} circuit breaker "
+                f"(status={result.get('status')}), will retry on next check"
+            )
 
     def _check_daily_reset(self) -> None:
-        """Check if daily reset is needed and reset daily tracking."""
-        now = datetime.now(tz=UTC)
+        """Check if daily reset is needed and reset daily tracking.
 
-        if now >= self._daily_reset_time:
-            self.logger.info("Daily reset triggered at UTC midnight")
+        Thread-safe: acquires lock before checking and modifying state.
+        """
+        with self._lock:
+            now = datetime.now(tz=UTC)
 
-            # Reset daily tracking
-            try:
-                metrics = self.strategy.get_operational_metrics()
-                self._daily_start_pnl = metrics.get("total_pnl_usdt", 0.0)
-                self._daily_peak_pnl = self._daily_start_pnl
-            except Exception as e:
-                self.logger.warning(f"Failed to reset daily PnL tracking: {e}")
+            if now >= self._daily_reset_time:
+                self.logger.info("Daily reset triggered at UTC midnight")
 
-            # Reset circuit breaker triggers for new day
-            with self._lock:
+                # Reset daily tracking
+                try:
+                    metrics = self.strategy.get_operational_metrics()
+                    self._daily_start_pnl = metrics.get("total_pnl_usdt", 0.0)
+                    self._daily_peak_pnl = self._daily_start_pnl
+                except Exception as e:
+                    self.logger.warning(f"Failed to reset daily PnL tracking: {e}")
+
+                # Reset circuit breaker triggers for new day
                 self._circuit_breakers_triggered.clear()
 
-            # Calculate next reset time
-            self._daily_reset_time = self._get_next_daily_reset()
+                # Calculate next reset time
+                self._daily_reset_time = self._get_next_daily_reset()
 
     @staticmethod
     def _get_next_daily_reset() -> datetime:

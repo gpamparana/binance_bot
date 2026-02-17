@@ -73,7 +73,7 @@ class OptimizationResultsDB:
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 timeout=30.0,
-                isolation_level="DEFERRED",  # Better concurrency than IMMEDIATE
+                isolation_level="IMMEDIATE",  # Safer for concurrent multi-process writes
             )
             self._local.conn.row_factory = sqlite3.Row
 

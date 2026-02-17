@@ -6,7 +6,7 @@ intelligent matching and tolerance-based comparisons.
 """
 
 import logging
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
@@ -162,9 +162,9 @@ class OrderDiff:
         self._precision_guard = precision_guard
         self._matcher = OrderMatcher(price_tolerance_bps, qty_tolerance_pct)
 
-        # Add caching to avoid unnecessary recalculations
-        self._last_desired_hash: int | None = None
-        self._last_live_hash: int | None = None
+        # Cache to avoid unnecessary recalculations
+        self._last_desired_key: tuple | None = None
+        self._last_live_key: tuple | None = None
         self._last_result: DiffResult | None = None
 
     def diff(self, desired_ladders: list[Ladder], live_orders: list[LiveOrder]) -> DiffResult:
@@ -195,14 +195,17 @@ class OrderDiff:
             - Uses level+side to correlate desired with live (not strict client_order_id)
 
         """
-        # Check cache first - avoid recalculation if inputs haven't changed
-        desired_hash = hash(str(desired_ladders))
-        live_hash = hash(str(live_orders))
+        # Check cache - use structural keys for reliable comparison
+        desired_key = tuple(
+            (l.side, tuple((r.price, r.qty) for r in l.rungs)) for l in desired_ladders
+        )
+        live_key = tuple((o.client_order_id, o.side, o.price, o.qty, o.status) for o in live_orders)
 
-        if (self._last_desired_hash == desired_hash and
-            self._last_live_hash == live_hash and
-            self._last_result is not None):
-            # Return cached result if inputs haven't changed
+        if (
+            self._last_desired_key == desired_key
+            and self._last_live_key == live_key
+            and self._last_result is not None
+        ):
             return self._last_result
 
         # Flatten and assign client order IDs to desired rungs
@@ -267,8 +270,8 @@ class OrderDiff:
         result = DiffResult.from_lists(adds, cancels, replaces)
 
         # Cache the result for next call
-        self._last_desired_hash = desired_hash
-        self._last_live_hash = live_hash
+        self._last_desired_key = desired_key
+        self._last_live_key = live_key
         self._last_result = result
 
         return result
@@ -447,16 +450,16 @@ class PostOnlyRetryHandler:
         # Common post-only rejection patterns from various exchanges
         # Note: NautilusTrader backtest uses "POST_ONLY" (underscore) and "TAKER"
         post_only_patterns = [
-            "post-only",                    # Binance format (hyphen)
-            "post only",                    # Generic format (space)
-            "post_only",                    # NautilusTrader format (underscore)
+            "post-only",  # Binance format (hyphen)
+            "post only",  # Generic format (space)
+            "post_only",  # NautilusTrader format (underscore)
             "would be filled immediately",  # Common pattern
-            "would immediately match",      # Common pattern
-            "would execute as taker",       # Common pattern
-            "would have been a taker",      # NautilusTrader backtest format
-            "would take liquidity",         # Common pattern
-            "would cross",                  # Common pattern
-            "taker",                        # Generic catch-all for taker rejections
+            "would immediately match",  # Common pattern
+            "would execute as taker",  # Common pattern
+            "would have been a taker",  # NautilusTrader backtest format
+            "would take liquidity",  # Common pattern
+            "would cross",  # Common pattern
+            "taker",  # Generic catch-all for taker rejections
         ]
 
         return any(pattern in reason_lower for pattern in post_only_patterns)

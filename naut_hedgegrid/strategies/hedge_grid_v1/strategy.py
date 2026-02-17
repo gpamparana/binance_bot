@@ -165,6 +165,9 @@ class HedgeGridV1(Strategy):
         # Diagnostic logging throttle (initialize to 0 instead of using hasattr)
         self._last_diagnostic_log: int = 0
 
+        # On-start position reconciliation flag
+        self._positions_reconciled: bool = False
+
     def on_start(self) -> None:
         """
         Start the strategy.
@@ -518,6 +521,109 @@ class HedgeGridV1(Strategy):
 
         self.log.info("HedgeGridV1 strategy stopped")
 
+    def _reconcile_existing_positions(self, mid: float) -> None:
+        """Attach TP/SL to positions that existed before this session started.
+
+        On restart, NautilusTrader reconciles positions from the exchange but
+        TP/SL exit orders from the previous session are lost. This method
+        detects unprotected positions and attaches new exit orders.
+
+        Called once on the first trading bar after startup.
+        """
+        self._positions_reconciled = True
+
+        if self._hedge_grid_config is None or self._instrument is None:
+            self.log.warning("[RECONCILE] Config or instrument not loaded, skipping")
+            return
+
+        for side in (Side.LONG, Side.SHORT):
+            position_id = PositionId(f"{self.instrument_id}-{side.value}")
+            position = self.cache.position(position_id)
+
+            if position is None or position.quantity == 0:
+                continue
+
+            # Check if TP/SL already exist for this side
+            has_tp = False
+            has_sl = False
+            side_abbr = "L" if side == Side.LONG else "S"
+            for order in self.cache.orders_open(venue=self._venue):
+                oid = order.client_order_id.value
+                if f"-TP-{side_abbr}" in oid:
+                    has_tp = True
+                if f"-SL-{side_abbr}" in oid:
+                    has_sl = True
+
+            if has_tp and has_sl:
+                self.log.info(
+                    f"[RECONCILE] {side} position ({float(position.quantity)}) "
+                    f"already has TP/SL, skipping"
+                )
+                continue
+
+            # Calculate TP/SL from average entry price
+            entry_price = float(position.avg_px_open)
+            qty = float(position.quantity)
+
+            mid_decimal = Decimal(str(mid))
+            entry_decimal = Decimal(str(entry_price))
+            step_bps = Decimal(str(self._hedge_grid_config.grid.grid_step_bps))
+            price_step = mid_decimal * (step_bps / Decimal("10000"))
+
+            if side == Side.LONG:
+                tp_price = float(
+                    (
+                        entry_decimal + Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                )
+                sl_price = float(
+                    (
+                        entry_decimal - Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                )
+            else:
+                tp_price = float(
+                    (
+                        entry_decimal - Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                )
+                sl_price = float(
+                    (
+                        entry_decimal + Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                )
+
+            ts_now = self.clock.timestamp_ns()
+
+            self.log.info(
+                f"[RECONCILE] Attaching TP/SL to existing {side} position: "
+                f"qty={qty}, entry={entry_price:.2f}, TP={tp_price:.2f}, SL={sl_price:.2f}"
+            )
+
+            tp_order = self._create_tp_order(
+                side=side,
+                quantity=qty,
+                tp_price=tp_price,
+                position_id=position_id,
+                level=0,
+                fill_event_ts=ts_now,
+            )
+            sl_order = self._create_sl_order(
+                side=side,
+                quantity=qty,
+                sl_price=sl_price,
+                position_id=position_id,
+                level=0,
+                fill_event_ts=ts_now,
+            )
+
+            self.submit_order(tp_order, position_id=position_id)
+            self.submit_order(sl_order, position_id=position_id)
+
+            # Mark as having exits so on_order_filled doesn't duplicate
+            with self._fills_lock:
+                self._fills_with_exits.add(f"{side.value}-RECONCILED")
+
     def on_bar(self, bar: Bar) -> None:
         """
         Handle new bar data.
@@ -585,6 +691,10 @@ class HedgeGridV1(Strategy):
             self.log.info("Regime detector not warm yet, skipping trading")
             return
 
+        # One-time: reconcile pre-existing positions from previous session
+        if not self._positions_reconciled:
+            self._reconcile_existing_positions(mid)
+
         # Check if grid recentering needed
         recenter_needed = GridEngine.recenter_needed(
             mid=mid,
@@ -646,6 +756,9 @@ class HedgeGridV1(Strategy):
             + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
 
+        # Filter rungs that would cross the spread at current market price
+        ladders = [ladder.filter_placeable(mid) for ladder in ladders]
+
         # Generate diff (using cache query instead of manual tracking)
         live_orders_list = self._get_live_grid_orders()
         diff_result = self._order_diff.diff(
@@ -664,10 +777,9 @@ class HedgeGridV1(Strategy):
 
         # Diagnostic logging for fill monitoring (every 5 minutes)
         current_time = self.clock.timestamp_ns()
-        if current_time % 300_000_000_000 < 60_000_000_000:  # Within first minute of 5-min window
-            if current_time - self._last_diagnostic_log >= 300_000_000_000:
-                self._last_diagnostic_log = current_time
-                self._log_diagnostic_status()
+        if current_time - self._last_diagnostic_log >= 300_000_000_000:
+            self._last_diagnostic_log = current_time
+            self._log_diagnostic_status()
 
     def on_event(self, event: Event) -> None:
         """
@@ -1916,6 +2028,10 @@ class HedgeGridV1(Strategy):
                 tp_orders += 1
             elif "-SL-" in order_id:
                 sl_orders += 1
+
+        # Periodic cleanup of stale retry counts (prevent unbounded growth)
+        if len(self._position_retry_counts) > 50:
+            self._position_retry_counts.clear()
 
         # Log comprehensive status
         self.log.info(

@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any
 
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import Gauge, make_wsgi_app
 from prometheus_client.core import CollectorRegistry
 
 logger = logging.getLogger(__name__)
@@ -201,9 +201,25 @@ class PrometheusExporter:
             return
 
         try:
-            # Start HTTP server in background
-            # Note: start_http_server creates its own thread
-            start_http_server(port=port, registry=self.registry)
+            # Create WSGI app from registry and wrap in stdlib HTTP server
+            # for proper shutdown support
+            from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+            class _QuietHandler(WSGIRequestHandler):
+                """Suppress access log noise from Prometheus scrapes."""
+
+                def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+                    pass  # Suppress per-request logging
+
+            app = make_wsgi_app(self.registry)
+            self._http_server = make_server("", port, app, handler_class=_QuietHandler)
+
+            self.server_thread = threading.Thread(
+                target=self._http_server.serve_forever,
+                name="PrometheusServer",
+                daemon=True,
+            )
+            self.server_thread.start()
             self.is_running = True
             logger.info(f"Prometheus metrics server started on port {port}")
             logger.info(f"Metrics available at: http://localhost:{port}/metrics")
@@ -214,19 +230,18 @@ class PrometheusExporter:
     def stop_server(self) -> None:
         """Stop Prometheus HTTP server and cleanup resources.
 
-        Signals the server thread to shutdown and waits for clean termination.
-        This method ensures all resources are properly released.
-
-        Note:
-            prometheus_client's start_http_server doesn't provide a clean shutdown
-            mechanism, so the server will continue running until process termination.
-            This method exists for API consistency and future enhancement.
+        Gracefully shuts down the HTTP server thread and releases the port.
         """
         if not self.is_running:
             logger.debug("Prometheus server not running, nothing to stop")
             return
 
         self._shutdown_event.set()
+
+        if hasattr(self, "_http_server") and self._http_server is not None:
+            self._http_server.shutdown()
+            self._http_server = None
+
         self.is_running = False
         logger.info("Prometheus metrics server stopped")
 

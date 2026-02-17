@@ -236,6 +236,26 @@ class Ladder:
         filtered = [r for r in self.rungs if r.tag == tag]
         return Ladder(side=self.side, rungs=tuple(filtered))
 
+    def filter_placeable(self, mid: float) -> "Ladder":
+        """Remove rungs that would cross the spread at current market price.
+
+        LONG rungs must be strictly below mid (buy below market).
+        SHORT rungs must be strictly above mid (sell above market).
+        Orders at exactly mid would immediately match, so they are filtered out.
+
+        Args:
+            mid: Current market mid price
+
+        Returns:
+            New Ladder with only placeable rungs
+
+        """
+        if self.side == Side.LONG:
+            valid = tuple(r for r in self.rungs if r.price < mid)
+        else:
+            valid = tuple(r for r in self.rungs if r.price > mid)
+        return Ladder(side=self.side, rungs=valid)
+
     def total_qty(self) -> float:
         """Calculate total quantity across all rungs.
 

@@ -23,7 +23,9 @@ from naut_hedgegrid.runners.run_backtest import BacktestRunner
 
 
 # Module-level function for pickling with multiprocessing
-def _run_single_backtest(args: tuple[Path, Path, dict[str, Any], int]) -> tuple[PerformanceMetrics | None, str | None]:
+def _run_single_backtest(
+    args: tuple[Path, Path, dict[str, Any], int],
+) -> tuple[PerformanceMetrics | None, str | None]:
     """
     Run a single backtest in a separate process.
 
@@ -44,13 +46,11 @@ def _run_single_backtest(args: tuple[Path, Path, dict[str, Any], int]) -> tuple[
     try:
         # Create temporary strategy config with trial parameters
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".yaml",
-            prefix=f"trial_{trial_id}_",
-            delete=False
+            mode="w", suffix=".yaml", prefix=f"trial_{trial_id}_", delete=False
         ) as temp_config:
             # Load base config and merge with trial parameters
             import yaml
+
             with open(base_strategy_config_path) as f:
                 base_config = yaml.safe_load(f)
 
@@ -69,7 +69,7 @@ def _run_single_backtest(args: tuple[Path, Path, dict[str, Any], int]) -> tuple[
         runner = BacktestRunner(
             backtest_config_path=backtest_config_path,
             strategy_config_paths=[temp_config_path],
-            run_id=f"trial_{trial_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            run_id=f"trial_{trial_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         )
 
         results = runner.run()
@@ -78,8 +78,7 @@ def _run_single_backtest(args: tuple[Path, Path, dict[str, Any], int]) -> tuple[
         if results and "engine" in results:
             generator = ReportGenerator()
             metrics = generator.calculate_metrics(
-                engine=results["engine"],
-                strategy_id=results.get("strategy_id", "HedgeGridV1")
+                engine=results["engine"], strategy_id=results.get("strategy_id", "HedgeGridV1")
             )
             return metrics, None
         return None, "Backtest returned no results"
@@ -94,8 +93,8 @@ def _run_single_backtest(args: tuple[Path, Path, dict[str, Any], int]) -> tuple[
         try:
             if "temp_config_path" in locals():
                 temp_config_path.unlink(missing_ok=True)
-        except:
-            pass
+        except Exception as cleanup_err:
+            logging.warning(f"Failed to cleanup temp config: {cleanup_err}")
 
 
 @dataclass
@@ -137,12 +136,7 @@ class ParallelBacktestRunner:
         Rich console for output
     """
 
-    def __init__(
-        self,
-        n_workers: int | None = None,
-        max_retries: int = 3,
-        verbose: bool = True
-    ):
+    def __init__(self, n_workers: int | None = None, max_retries: int = 3, verbose: bool = True):
         """
         Initialize parallel backtest runner.
 
@@ -172,9 +166,7 @@ class ParallelBacktestRunner:
             pass
 
     def run_backtests(
-        self,
-        tasks: list[BacktestTask],
-        callback: Callable[[BacktestResult], None] | None = None
+        self, tasks: list[BacktestTask], callback: Callable[[BacktestResult], None] | None = None
     ) -> list[BacktestResult]:
         """
         Run multiple backtests in parallel.
@@ -195,7 +187,9 @@ class ParallelBacktestRunner:
         failed_tasks = []
 
         if self.verbose and self.console:
-            self.console.print(f"[cyan]Running {len(tasks)} backtests with {self.n_workers} workers[/cyan]")
+            self.console.print(
+                f"[cyan]Running {len(tasks)} backtests with {self.n_workers} workers[/cyan]"
+            )
 
         # Prepare arguments for multiprocessing
         task_args = [
@@ -203,7 +197,7 @@ class ParallelBacktestRunner:
                 task.backtest_config_path,
                 task.base_strategy_config_path,
                 task.parameters,
-                task.trial_id
+                task.trial_id,
             )
             for task in tasks
         ]
@@ -218,12 +212,9 @@ class ParallelBacktestRunner:
                     BarColumn(),
                     TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                     TimeElapsedColumn(),
-                    console=self.console
+                    console=self.console,
                 ) as progress:
-                    task_id = progress.add_task(
-                        "[cyan]Running backtests...",
-                        total=len(tasks)
-                    )
+                    task_id = progress.add_task("[cyan]Running backtests...", total=len(tasks))
 
                     # Submit tasks and track futures
                     future_to_task = {
@@ -244,7 +235,7 @@ class ParallelBacktestRunner:
                                 trial_id=task.trial_id,
                                 metrics=metrics,
                                 error=error,
-                                duration_seconds=duration
+                                duration_seconds=duration,
                             )
 
                             if error and self.max_retries > 0:
@@ -261,7 +252,7 @@ class ParallelBacktestRunner:
                                 trial_id=task.trial_id,
                                 metrics=None,
                                 error=str(e),
-                                duration_seconds=duration
+                                duration_seconds=duration,
                             )
                             results.append(result)
                             if callback:
@@ -288,7 +279,7 @@ class ParallelBacktestRunner:
                             trial_id=task.trial_id,
                             metrics=metrics,
                             error=error,
-                            duration_seconds=duration
+                            duration_seconds=duration,
                         )
 
                         if error and self.max_retries > 0:
@@ -304,7 +295,7 @@ class ParallelBacktestRunner:
                             trial_id=task.trial_id,
                             metrics=None,
                             error=str(e),
-                            duration_seconds=duration
+                            duration_seconds=duration,
                         )
                         results.append(result)
                         if callback:
@@ -313,12 +304,14 @@ class ParallelBacktestRunner:
         # Retry failed tasks
         if failed_tasks and self.max_retries > 0:
             if self.verbose and self.console:
-                self.console.print(f"[yellow]Retrying {len(failed_tasks)} failed backtests[/yellow]")
+                self.console.print(
+                    f"[yellow]Retrying {len(failed_tasks)} failed backtests[/yellow]"
+                )
 
             retry_runner = ParallelBacktestRunner(
                 n_workers=self.n_workers,
                 max_retries=self.max_retries - 1,  # Decrement retries
-                verbose=self.verbose
+                verbose=self.verbose,
             )
             retry_results = retry_runner.run_backtests(failed_tasks, callback)
             results.extend(retry_results)
@@ -338,10 +331,7 @@ class ParallelBacktestRunner:
 
         return results
 
-    def run_single(
-        self,
-        task: BacktestTask
-    ) -> BacktestResult:
+    def run_single(self, task: BacktestTask) -> BacktestResult:
         """
         Run a single backtest task.
 
@@ -361,27 +351,23 @@ class ParallelBacktestRunner:
         start_time = datetime.now()
 
         try:
-            metrics, error = _run_single_backtest((
-                task.backtest_config_path,
-                task.base_strategy_config_path,
-                task.parameters,
-                task.trial_id
-            ))
+            metrics, error = _run_single_backtest(
+                (
+                    task.backtest_config_path,
+                    task.base_strategy_config_path,
+                    task.parameters,
+                    task.trial_id,
+                )
+            )
 
             duration = (datetime.now() - start_time).total_seconds()
 
             return BacktestResult(
-                trial_id=task.trial_id,
-                metrics=metrics,
-                error=error,
-                duration_seconds=duration
+                trial_id=task.trial_id, metrics=metrics, error=error, duration_seconds=duration
             )
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
             return BacktestResult(
-                trial_id=task.trial_id,
-                metrics=None,
-                error=str(e),
-                duration_seconds=duration
+                trial_id=task.trial_id, metrics=None, error=str(e), duration_seconds=duration
             )

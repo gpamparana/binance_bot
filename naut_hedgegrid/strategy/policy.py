@@ -33,8 +33,8 @@ class PlacementPolicy:
 
         Notes:
             - SIDEWAYS regime: Returns ladders unchanged (balanced)
-            - UP regime: Throttles LONG side (counter-trend)
-            - DOWN regime: Throttles SHORT side (counter-trend)
+            - UP regime: Throttles SHORT side (counter-trend, needs reversal for TP)
+            - DOWN regime: Throttles LONG side (counter-trend, needs reversal for TP)
             - Both strategies use same throttling logic, differ only in intent
 
         """
@@ -62,19 +62,27 @@ class PlacementPolicy:
     def _get_counter_side(regime: Regime) -> Side:
         """Determine counter-trend side for given regime.
 
+        In grid trading, counter-trend orders fill into the trend but need
+        a reversal for profit (TP is against the trend direction):
+
+        - UP regime: SHORT grid orders fill as price rises, but TP requires
+          price to fall back → SHORT is counter-trend
+        - DOWN regime: LONG grid orders fill as price drops, but TP requires
+          price to rise back → LONG is counter-trend
+
         Args:
             regime: Current market regime
 
         Returns:
-            Side that is counter-trend (LONG for UP, SHORT for DOWN)
+            Side that is counter-trend (SHORT for UP, LONG for DOWN)
 
         """
         if regime == Regime.UP:
-            # In uptrend, LONG is counter-trend (buying into strength)
-            return Side.LONG
-        if regime == Regime.DOWN:
-            # In downtrend, SHORT is counter-trend (selling into weakness)
+            # In uptrend, SHORT fills into strength but needs reversal for profit
             return Side.SHORT
+        if regime == Regime.DOWN:
+            # In downtrend, LONG fills into weakness but needs reversal for profit
+            return Side.LONG
         # SIDEWAYS: This shouldn't be called, but return LONG as default
         return Side.LONG
 

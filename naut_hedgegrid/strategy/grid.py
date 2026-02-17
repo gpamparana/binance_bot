@@ -29,10 +29,9 @@ class GridEngine:
             regime: Current market regime for directional bias
 
         Returns:
-            List of Ladder instances (1-2 ladders depending on regime)
-            - UP regime: [SHORT ladder] only
-            - DOWN regime: [LONG ladder] only
-            - SIDEWAYS regime: [LONG ladder, SHORT ladder]
+            List of Ladder instances: [LONG ladder, SHORT ladder]
+            Always returns both ladders. Regime-based throttling is handled
+            by PlacementPolicy.shape_ladders() in the orchestration pipeline.
 
         Raises:
             ValueError: If mid price invalid or inventory caps exceeded
@@ -56,8 +55,8 @@ class GridEngine:
         # Validate inventory caps
         GridEngine._validate_inventory_caps(long_ladder, short_ladder, mid, cfg)
 
-        # Select ladders based on regime
-        return GridEngine._select_ladders_by_regime(long_ladder, short_ladder, regime)
+        # Always return both ladders - PlacementPolicy handles regime-based throttling
+        return [long_ladder, short_ladder]
 
     @staticmethod
     def _build_long_ladder(
@@ -99,9 +98,10 @@ class GridEngine:
             sl_decimal = None
             if cfg.exit.sl_steps > 0:
                 sl_decimal = price_decimal - (Decimal(cfg.exit.sl_steps) * price_step)
-                # Ensure SL is positive
-                if sl_decimal <= 0:
-                    sl_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
+                # Ensure SL doesn't create catastrophic loss (floor at 5% below entry)
+                sl_floor = price_decimal * Decimal("0.95")
+                if sl_decimal <= 0 or sl_decimal < sl_floor:
+                    sl_decimal = sl_floor
                 sl_decimal = sl_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             # Only convert to float at the very end when creating Rung
@@ -151,9 +151,10 @@ class GridEngine:
             tp_decimal = None
             if cfg.exit.tp_steps > 0:
                 tp_decimal = price_decimal - (Decimal(cfg.exit.tp_steps) * price_step)
-                # Ensure TP is positive
-                if tp_decimal <= 0:
-                    tp_decimal = price_decimal * Decimal("0.01")  # Minimum 1% of entry price
+                # Ensure TP doesn't go unreasonably low (floor at 5% below entry)
+                tp_floor = price_decimal * Decimal("0.95")
+                if tp_decimal <= 0 or tp_decimal < tp_floor:
+                    tp_decimal = tp_floor
                 tp_decimal = tp_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             sl_decimal = None
@@ -213,35 +214,6 @@ class GridEngine:
                 f"Reduce grid_levels_short, base_qty, or qty_scale."
             )
             raise ValueError(msg)
-
-    @staticmethod
-    def _select_ladders_by_regime(
-        long_ladder: Ladder,
-        short_ladder: Ladder,
-        regime: Regime,
-    ) -> list[Ladder]:
-        """Select ladders based on market regime.
-
-        Args:
-            long_ladder: LONG side ladder
-            short_ladder: SHORT side ladder
-            regime: Current market regime
-
-        Returns:
-            List of selected ladders
-            - UP: [short_ladder] (sell into strength)
-            - DOWN: [long_ladder] (buy into weakness)
-            - SIDEWAYS: [long_ladder, short_ladder] (range trading)
-
-        """
-        if regime == Regime.UP:
-            # Uptrend: favor SHORT ladder (sell into strength)
-            return [short_ladder]
-        if regime == Regime.DOWN:
-            # Downtrend: favor LONG ladder (buy into weakness)
-            return [long_ladder]
-        # SIDEWAYS: both sides for range trading
-        return [long_ladder, short_ladder]
 
     @staticmethod
     def recenter_needed(

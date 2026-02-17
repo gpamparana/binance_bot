@@ -294,6 +294,68 @@ def test_ladder_total_qty() -> None:
     assert ladder.total_qty() == pytest.approx(0.45, rel=1e-6)
 
 
+def test_ladder_filter_placeable_long() -> None:
+    """LONG rungs must be strictly below mid price."""
+    rungs = [
+        Rung(price=95.0, qty=0.1, side=Side.LONG),
+        Rung(price=98.0, qty=0.1, side=Side.LONG),
+        Rung(price=102.0, qty=0.1, side=Side.LONG),
+    ]
+    ladder = Ladder.from_list(Side.LONG, rungs)
+
+    filtered = ladder.filter_placeable(mid=100.0)
+    assert len(filtered) == 2
+    assert [r.price for r in filtered] == [95.0, 98.0]
+
+
+def test_ladder_filter_placeable_short() -> None:
+    """SHORT rungs must be strictly above mid price."""
+    rungs = [
+        Rung(price=98.0, qty=0.1, side=Side.SHORT),
+        Rung(price=102.0, qty=0.1, side=Side.SHORT),
+        Rung(price=105.0, qty=0.1, side=Side.SHORT),
+    ]
+    ladder = Ladder.from_list(Side.SHORT, rungs)
+
+    filtered = ladder.filter_placeable(mid=100.0)
+    assert len(filtered) == 2
+    assert [r.price for r in filtered] == [102.0, 105.0]
+
+
+def test_ladder_filter_placeable_at_mid_excluded() -> None:
+    """Rungs exactly at mid price are filtered out (would immediately match)."""
+    long_ladder = Ladder.from_list(Side.LONG, [Rung(price=100.0, qty=0.1, side=Side.LONG)])
+    short_ladder = Ladder.from_list(Side.SHORT, [Rung(price=100.0, qty=0.1, side=Side.SHORT)])
+
+    assert len(long_ladder.filter_placeable(mid=100.0)) == 0
+    assert len(short_ladder.filter_placeable(mid=100.0)) == 0
+
+
+def test_ladder_filter_placeable_all_valid() -> None:
+    """When all rungs are on the correct side, none are filtered."""
+    rungs = [
+        Rung(price=95.0, qty=0.1, side=Side.LONG),
+        Rung(price=97.0, qty=0.1, side=Side.LONG),
+    ]
+    ladder = Ladder.from_list(Side.LONG, rungs)
+
+    filtered = ladder.filter_placeable(mid=100.0)
+    assert len(filtered) == 2
+
+
+def test_ladder_filter_placeable_all_filtered() -> None:
+    """When all rungs are past mid, result is empty ladder."""
+    rungs = [
+        Rung(price=102.0, qty=0.1, side=Side.LONG),
+        Rung(price=105.0, qty=0.1, side=Side.LONG),
+    ]
+    ladder = Ladder.from_list(Side.LONG, rungs)
+
+    filtered = ladder.filter_placeable(mid=100.0)
+    assert len(filtered) == 0
+    assert filtered.is_empty
+
+
 # OrderIntent Tests
 
 
