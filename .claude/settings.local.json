@@ -26,7 +26,12 @@
       "Bash(yes:*)",
       "Bash(curl:*)",
       "Bash(git status:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(SKIP=ruff git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)"
     ],
     "deny": [],
     "ask": []
