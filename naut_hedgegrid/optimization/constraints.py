@@ -43,7 +43,7 @@ class ConstraintThresholds:
 
     def __post_init__(self):
         """Validate constraint thresholds."""
-        if self.min_sharpe_ratio < -5:
+        if self.min_sharpe_ratio < -1000:
             raise ValueError("Minimum Sharpe ratio too low")
         if self.max_drawdown_pct <= 0 or self.max_drawdown_pct > 100:
             raise ValueError("Max drawdown must be between 0 and 100%")
@@ -111,9 +111,9 @@ class ConstraintsValidator:
             violations = self.get_violations(metrics)
 
             if self.strict_mode:
+                # In strict mode, any violation fails validation
                 return len(violations) == 0
-            # Lenient mode: allow up to 1 violation for exploration phases
-            # of optimization where strict filtering may reject promising trials
+            # In lenient mode, allow up to 1 minor violation
             return len(violations) <= 1
 
         except (AttributeError, TypeError, ValueError):

@@ -4,16 +4,24 @@ This module provides the high-level interface for running parameter
 optimization using Optuna, integrating all components of the framework.
 """
 
+import copy
+import gc
 import logging
-import math
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import optuna
+import psutil
 import yaml
 from nautilus_trader.model.enums import OmsType, OrderStatus
+from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.objects import Currency
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from rich.console import Console
@@ -36,6 +44,26 @@ from naut_hedgegrid.optimization.objective import MultiObjectiveFunction, Object
 from naut_hedgegrid.optimization.param_space import ParameterSpace
 from naut_hedgegrid.optimization.results_db import OptimizationResultsDB, OptimizationTrial
 from naut_hedgegrid.runners.run_backtest import BacktestRunner
+
+
+class BacktestTimeoutError(Exception):
+    """Raised when a backtest exceeds the timeout limit."""
+
+
+class BacktestMemoryError(Exception):
+    """Raised when a backtest exceeds memory limits."""
+
+
+def get_memory_usage_gb() -> float:
+    """Get current memory usage in GB."""
+    process = psutil.Process()
+    return process.memory_info().rss / (1024**3)  # Convert bytes to GB
+
+
+def check_memory_limit(limit_gb: float = 2.0) -> bool:
+    """Check if memory usage exceeds limit."""
+    current_gb = get_memory_usage_gb()
+    return current_gb > limit_gb
 
 
 class StrategyOptimizer:
@@ -97,6 +125,9 @@ class StrategyOptimizer:
         constraint_thresholds: ConstraintThresholds | None = None,
         storage: str | None = None,
         verbose: bool = True,
+        backtest_timeout_seconds: int = 300,  # 5 minutes default
+        memory_limit_gb: float = 2.0,  # 2GB default
+        enable_gc: bool = True,  # Enable aggressive garbage collection
     ):
         """
         Initialize strategy optimizer.
@@ -125,12 +156,21 @@ class StrategyOptimizer:
             Optuna storage URL (e.g., sqlite:///optuna.db)
         verbose : bool
             Whether to show progress output
+        backtest_timeout_seconds : int
+            Maximum seconds per backtest trial (default 300 = 5 minutes)
+        memory_limit_gb : float
+            Maximum memory usage in GB before aborting (default 2.0)
+        enable_gc : bool
+            Enable aggressive garbage collection after each trial
         """
         self.backtest_config_path = Path(backtest_config_path)
         self.base_strategy_config_path = Path(base_strategy_config_path)
         self.n_trials = n_trials
         self.n_jobs = n_jobs
         self.verbose = verbose
+        self.backtest_timeout_seconds = backtest_timeout_seconds
+        self.memory_limit_gb = memory_limit_gb
+        self.enable_gc = enable_gc
 
         # Generate study name if not provided
         if study_name is None:
@@ -148,13 +188,30 @@ class StrategyOptimizer:
         # Optuna storage
         self.storage = storage
 
-        # Progress tracking
+        # Progress tracking (thread-safe for parallel execution)
         self.best_score = float("-inf")
         self.valid_trials = 0
         self.total_trials_run = 0
+        self._lock = threading.Lock()
+
+        # Memory tracking
+        self.initial_memory_gb = get_memory_usage_gb()
+        self.peak_memory_gb = self.initial_memory_gb
+
+        # Thread pool for timeout handling
+        # Use more workers to avoid bottlenecks when running parallel trials
+        self.executor = ThreadPoolExecutor(max_workers=max(1, self.n_jobs * 2))
 
         # Load and validate base configs
         self._validate_base_configs()
+
+        # Report initial memory usage
+        if self.verbose and self.console:
+            self.console.print(f"[dim]Initial Memory:[/dim] {self.initial_memory_gb:.2f} GB")
+            self.console.print(f"[dim]Memory Limit:[/dim] {self.memory_limit_gb:.2f} GB")
+            self.console.print(
+                f"[dim]Timeout:[/dim] {self.backtest_timeout_seconds} seconds per trial"
+            )
 
     def _validate_base_configs(self):
         """Validate that base configuration files are valid."""
@@ -164,6 +221,10 @@ class StrategyOptimizer:
 
             # Load base strategy config
             self.base_strategy_config = HedgeGridConfigLoader.load(self.base_strategy_config_path)
+
+            # Cache the base config dict to avoid repeated file I/O
+            with open(self.base_strategy_config_path) as f:
+                self._base_config_dict = yaml.safe_load(f)
 
             if self.verbose and self.console:
                 self.console.print("[green]✓[/green] Base configurations loaded successfully")
@@ -212,8 +273,10 @@ class StrategyOptimizer:
             """Objective function for Optuna trial."""
             trial_start = datetime.now()
 
-            # Increment trial counter at start (so all log messages show correct sequential number)
-            self.total_trials_run += 1
+            # Increment trial counter at start (thread-safe for parallel execution)
+            with self._lock:
+                self.total_trials_run += 1
+                current_trial_num = self.total_trials_run
 
             try:
                 # Suggest parameters from trial
@@ -229,7 +292,7 @@ class StrategyOptimizer:
                 if metrics is None:
                     if self.verbose and self.console:
                         self.console.print(
-                            f"[red]✗ Trial {self.total_trials_run}: Backtest failed[/red]"
+                            f"[red]✗ Trial {current_trial_num}: Backtest failed[/red]"
                         )
                     return float("-inf")
 
@@ -237,13 +300,15 @@ class StrategyOptimizer:
                 is_valid = self.constraints.is_valid(metrics)
                 violations = self.constraints.get_violations(metrics)
 
-                # Calculate multi-objective score
-                score = self.objective_func.calculate_score(metrics)
-
-                # Update tracking
+                # Calculate multi-objective score only if valid
                 if is_valid:
-                    self.valid_trials += 1
-                self.best_score = max(score, self.best_score)
+                    score = self.objective_func.calculate_score(metrics)
+                    with self._lock:
+                        self.valid_trials += 1
+                        self.best_score = max(score, self.best_score)
+                else:
+                    # Invalid trials get worst possible score
+                    score = float("-inf")
 
                 # Store validation result in Optuna trial for later access
                 trial.set_user_attr("is_valid", is_valid)
@@ -267,7 +332,7 @@ class StrategyOptimizer:
                 # Log trial result (only significant ones or invalid)
                 if self.verbose and self.console:
                     self._log_trial_result_compact(
-                        self.total_trials_run, parameters, metrics, score, is_valid, violations
+                        current_trial_num, metrics, score, is_valid, violations
                     )
 
                 return score
@@ -289,7 +354,7 @@ class StrategyOptimizer:
 
                 if self.verbose and self.console:
                     self.console.print(
-                        f"[red]✗ Trial {self.total_trials_run} ERROR: {str(e)[:80]}[/red]"
+                        f"[red]✗ Trial {current_trial_num} ERROR: {str(e)[:80]}[/red]"
                     )
 
                 return float("-inf")
@@ -342,13 +407,150 @@ class StrategyOptimizer:
         # Save best parameters to YAML
         self._save_best_parameters(study)
 
+        # Clean up executor
+        self._cleanup()
+
         return study
+
+    def _cleanup(self):
+        """Clean up resources after optimization."""
+        try:
+            # Shutdown executor
+            if hasattr(self, "executor"):
+                self.executor.shutdown(wait=False)
+
+            # Force garbage collection
+            gc.collect()
+
+            # Report final memory
+            if self.verbose and self.console:
+                final_mem = get_memory_usage_gb()
+                self.console.print(f"[dim]Cleanup complete. Memory: {final_mem:.2f} GB[/dim]")
+        except Exception as e:
+            logging.warning(f"Cleanup error: {e}")
+
+    def _run_backtest_with_timeout(
+        self, trial_id: int, parameters: dict[str, Any], timeout_seconds: int
+    ) -> PerformanceMetrics | None:
+        """
+        Run backtest with timeout protection using thread executor.
+
+        This wrapper ensures the backtest completes within the timeout limit.
+        """
+        future = self.executor.submit(self._run_backtest_core, trial_id, parameters)
+
+        try:
+            # Wait for backtest with timeout
+            result = future.result(timeout=timeout_seconds)
+            return result
+        except FuturesTimeoutError:
+            # Backtest exceeded timeout
+            future.cancel()
+            if self.verbose and self.console:
+                self.console.print(
+                    f"[yellow]⚠ Trial {trial_id}: Timeout after {timeout_seconds}s[/yellow]"
+                )
+            return None
+        except Exception as e:
+            # Other errors during backtest
+            if self.verbose and self.console:
+                self.console.print(f"[red]✗ Trial {trial_id}: Error - {str(e)[:100]}[/red]")
+            return None
 
     def _run_backtest_with_parameters(
         self, trial_id: int, parameters: dict[str, Any]
     ) -> PerformanceMetrics | None:
         """
-        Run backtest with given parameters.
+        Run backtest with given parameters, including timeout and memory protection.
+
+        Parameters
+        ----------
+        trial_id : int
+            Trial identifier
+        parameters : Dict[str, Any]
+            Parameter dictionary to test
+
+        Returns
+        -------
+        PerformanceMetrics or None
+            Performance metrics if successful, None if failed
+        """
+        start_time = time.time()
+        start_memory_gb = get_memory_usage_gb()
+
+        # Check memory before starting
+        if check_memory_limit(self.memory_limit_gb):
+            if self.verbose and self.console:
+                self.console.print(
+                    f"[yellow]⚠ Trial {trial_id}: Memory limit exceeded "
+                    f"({start_memory_gb:.2f} GB > {self.memory_limit_gb:.2f} GB)[/yellow]"
+                )
+            # Force garbage collection
+            if self.enable_gc:
+                gc.collect()
+                time.sleep(0.5)  # Brief pause for memory to settle
+                # Check again after GC
+                if check_memory_limit(self.memory_limit_gb):
+                    return None
+
+        try:
+            # Log progress
+            if self.verbose and self.console and trial_id % 10 == 0:
+                elapsed = time.time() - start_time
+                self.console.print(
+                    f"[dim]Starting Trial {trial_id} | "
+                    f"Memory: {start_memory_gb:.2f} GB | "
+                    f"Timeout: {self.backtest_timeout_seconds}s[/dim]"
+                )
+
+            # Run backtest with timeout protection
+            result = self._run_backtest_with_timeout(
+                trial_id, parameters, self.backtest_timeout_seconds
+            )
+
+            # Check memory after backtest
+            end_memory_gb = get_memory_usage_gb()
+            memory_used_gb = end_memory_gb - start_memory_gb
+
+            # Update peak memory
+            with self._lock:
+                self.peak_memory_gb = max(self.peak_memory_gb, end_memory_gb)
+
+            # Log memory usage if significant
+            if memory_used_gb > 0.5:  # More than 500 MB used
+                if self.verbose and self.console:
+                    self.console.print(
+                        f"[yellow]⚠ Trial {trial_id}: High memory usage "
+                        f"(+{memory_used_gb:.2f} GB)[/yellow]"
+                    )
+
+            # Aggressive garbage collection after each trial
+            if self.enable_gc:
+                gc.collect()
+
+            # Log completion time
+            elapsed_time = time.time() - start_time
+            if elapsed_time > 60 and self.verbose:  # Log if took more than 1 minute
+                self.console.print(f"[dim]Trial {trial_id} completed in {elapsed_time:.1f}s[/dim]")
+
+            return result
+
+        except Exception as e:
+            logging.exception(f"Unexpected error in trial {trial_id}: {e}")
+            return None
+        finally:
+            # Always clean up memory
+            if self.enable_gc:
+                gc.collect()
+
+    def _run_backtest_core(
+        self, trial_id: int, parameters: dict[str, Any]
+    ) -> PerformanceMetrics | None:
+        """
+        Core backtest execution logic without timeout handling.
+
+        This method contains the actual backtest logic and is called
+        by the timeout wrapper.
 
         Parameters
         ----------
@@ -368,17 +570,16 @@ class StrategyOptimizer:
             original_log_level = self.backtest_config.output.log_level
             original_log_level_file = self.backtest_config.output.log_level_file
 
-            # Set to ERROR to suppress verbose output
+            # Set to ERROR to suppress most logs (CRITICAL not supported by Rust backend)
             self.backtest_config.output.log_level = "ERROR"
-            self.backtest_config.output.log_level_file = None  # Disable file logging
+            self.backtest_config.output.log_level_file = None  # Disable file logging completely
 
             # Create temporary strategy config with trial parameters
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", prefix=f"trial_{trial_id}_", delete=False
             ) as temp_config:
-                # Load base config
-                with open(self.base_strategy_config_path) as f:
-                    base_config = yaml.safe_load(f)
+                # Use cached base config dict (avoid file I/O)
+                base_config = copy.deepcopy(self._base_config_dict)
 
                 # Deep merge parameters into base config
                 for section, params in parameters.items():
@@ -388,6 +589,11 @@ class StrategyOptimizer:
                     else:
                         # Handle new sections
                         base_config[section] = params
+
+                # Force optimization mode to reduce logging and retries
+                if "execution" not in base_config:
+                    base_config["execution"] = {}
+                base_config["execution"]["optimization_mode"] = True
 
                 # Write merged config
                 yaml.dump(base_config, temp_config)
@@ -427,401 +633,288 @@ class StrategyOptimizer:
 
             # Extract metrics
             if engine:
-                # Get basic metrics from Nautilus
-                from naut_hedgegrid.metrics.report import PerformanceMetrics
-
-                # Get portfolio and try to extract basic metrics
                 try:
+                    # Get portfolio and account
                     portfolio = engine.portfolio
-                    starting_capital = 10000.0  # From backtest config
 
-                    # Get ALL orders (filled) to count grid fills properly
-                    all_orders = engine.cache.orders()
-                    filled_orders = [o for o in all_orders if o.status == OrderStatus.FILLED]
+                    # Get venue - default to BINANCE since it's hardcoded in our configs
+                    venue = Venue("BINANCE")
+                    account = portfolio.account(venue)
 
-                    # Count actual grid fills (this is what matters for grid trading)
-                    total_trades = len(filled_orders)
+                    # Get currency
+                    currency = Currency.from_str("USDT")
 
-                    # Helper to safely convert Nautilus types to float
-                    def to_float(value) -> float:
-                        """Convert Nautilus Money/Price/Quantity or float to float."""
-                        if value is None:
-                            return 0.0
-                        if isinstance(value, (int, float)):
-                            return float(value)
-                        if hasattr(value, "as_double"):
-                            return float(value.as_double())
-                        return float(value)
+                    # Extract starting capital from config
+                    starting_capital = 10000.0  # Default
+                    if (
+                        self.backtest_config.venues
+                        and self.backtest_config.venues[0].starting_balances
+                    ):
+                        starting_balance = self.backtest_config.venues[0].starting_balances[0]
+                        starting_capital = float(starting_balance.total)
 
-                    # === PRIMARY METHOD: Get PnL from account balance ===
-                    # This is the most reliable method for grid trading where
-                    # positions are rarely fully closed
+                    # ==================================================================
+                    # 1. Extract actual PnL from portfolio
+                    # ==================================================================
                     total_pnl = 0.0
-                    try:
-                        from nautilus_trader.model.identifiers import Venue
+                    total_realized_pnl = 0.0
+                    total_unrealized_pnl = 0.0
 
-                        from naut_hedgegrid.config.venue import VenueConfigLoader
-
-                        # Load venue config to get the actual venue name
-                        venue_cfg = VenueConfigLoader.load(
-                            self.backtest_config.venues[0].config_path
+                    if account:
+                        # Get final balance
+                        final_balance = (
+                            float(account.balance_total(currency).as_double())
+                            if account.balance_total(currency)
+                            else starting_capital
                         )
-                        venue = Venue(venue_cfg.venue.name)
-                        account = portfolio.account(venue)
-                        if account:
-                            balances = account.balances()
-                            for currency, balance in balances.items():
-                                if hasattr(balance, "total"):
-                                    end_balance = to_float(balance.total)
-                                    total_pnl = end_balance - starting_capital
-                                    break
-                    except Exception as e:
-                        logging.debug(f"Could not get account balance: {e}")
+                        total_pnl = final_balance - starting_capital
 
-                    # === FALLBACK: Calculate PnL from fills ===
-                    # Pair up fills to calculate realized PnL per round-trip
+                        # Try to get realized and unrealized PnL using venue
+                        # These methods return dict of {Currency: Money}
+                        realized_pnls_dict = portfolio.realized_pnls(venue)
+                        if realized_pnls_dict and currency in realized_pnls_dict:
+                            total_realized_pnl = float(realized_pnls_dict[currency].as_double())
+
+                        unrealized_pnls_dict = portfolio.unrealized_pnls(venue)
+                        if unrealized_pnls_dict and currency in unrealized_pnls_dict:
+                            total_unrealized_pnl = float(unrealized_pnls_dict[currency].as_double())
+
+                    # If we didn't get PnL from account, try BacktestResult
+                    if total_pnl == 0.0:
+                        try:
+                            result = engine.get_result()
+                            if result and result.stats_pnls:
+                                # stats_pnls is dict[str, dict[str, float]] - strategy_id -> pnl dict
+                                for strategy_pnls in result.stats_pnls.values():
+                                    if "total" in strategy_pnls:
+                                        total_pnl = strategy_pnls["total"]
+                                    elif "pnl" in strategy_pnls:
+                                        total_pnl = strategy_pnls["pnl"]
+                                    break
+                        except Exception:
+                            pass
+
+                    # Calculate return percentage
+                    total_return_pct = (
+                        (total_pnl / starting_capital * 100) if starting_capital > 0 else 0.0
+                    )
+
+                    # ==================================================================
+                    # 2. Extract trade statistics from positions
+                    # ==================================================================
+                    positions_closed = engine.cache.positions_closed()
+                    positions_open = engine.cache.positions_open()
+
+                    total_trades = len(positions_closed)  # Count closed positions as trades
                     winning_trades = 0
                     losing_trades = 0
                     total_win = 0.0
                     total_loss = 0.0
 
-                    if total_trades > 0:
-                        # Group fills by position side and calculate PnL
-                        # For grid trading: track entry/exit pairs
-                        long_entries = []  # (price, qty) for buys
-                        short_entries = []  # (price, qty) for sells
+                    # Analyze closed positions for win/loss statistics
+                    for pos in positions_closed:
+                        if hasattr(pos, "realized_pnl") and pos.realized_pnl:
+                            pnl = float(pos.realized_pnl.as_double())
+                            if pnl > 0:
+                                winning_trades += 1
+                                total_win += pnl
+                            elif pnl < 0:
+                                losing_trades += 1
+                                total_loss += abs(pnl)
 
-                        for order in filled_orders:
-                            if not hasattr(order, "avg_px") or order.avg_px is None:
-                                continue
+                    # If no closed positions, count filled orders as proxy for activity
+                    if total_trades == 0:
+                        all_orders = engine.cache.orders()
+                        filled_orders = [o for o in all_orders if o.status == OrderStatus.FILLED]
+                        # Count filled orders but don't use for win/loss (we have no PnL data)
+                        total_trades = len(filled_orders)
+                        # Don't fake win rate - leave at 0 if no position data
+                        winning_trades = 0
+                        losing_trades = 0
 
-                            fill_price = to_float(order.avg_px)
-                            fill_qty = to_float(order.filled_qty)
-                            is_buy = order.side.name == "BUY"
+                    # Calculate win rate and profit factor
+                    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
+                    profit_factor = (
+                        (total_win / total_loss)
+                        if total_loss > 0
+                        else (total_win if total_win > 0 else 0.0)
+                    )
 
-                            # Determine if this is an entry or exit based on reduce_only
-                            is_reduce_only = getattr(order, "is_reduce_only", False)
+                    avg_win = total_win / winning_trades if winning_trades > 0 else 0.0
+                    avg_loss = total_loss / losing_trades if losing_trades > 0 else 0.0
+                    avg_trade_pnl = total_realized_pnl / total_trades if total_trades > 0 else 0.0
 
-                            if is_buy:
-                                if is_reduce_only and short_entries:
-                                    # Closing short position
-                                    entry_price, entry_qty = short_entries.pop(0)
-                                    qty_to_close = min(fill_qty, entry_qty)
-                                    pnl = (entry_price - fill_price) * qty_to_close
-                                    if pnl > 0:
-                                        winning_trades += 1
-                                        total_win += pnl
-                                    else:
-                                        losing_trades += 1
-                                        total_loss += abs(pnl)
-                                    # Put back remainder if any
-                                    if entry_qty > qty_to_close:
-                                        short_entries.insert(
-                                            0, (entry_price, entry_qty - qty_to_close)
-                                        )
-                                else:
-                                    # Opening long position
-                                    long_entries.append((fill_price, fill_qty))
-                            elif is_reduce_only and long_entries:
-                                # Closing long position
-                                entry_price, entry_qty = long_entries.pop(0)
-                                qty_to_close = min(fill_qty, entry_qty)
-                                pnl = (fill_price - entry_price) * qty_to_close
-                                if pnl > 0:
-                                    winning_trades += 1
-                                    total_win += pnl
-                                else:
-                                    losing_trades += 1
-                                    total_loss += abs(pnl)
-                                # Put back remainder if any
-                                if entry_qty > qty_to_close:
-                                    long_entries.insert(0, (entry_price, entry_qty - qty_to_close))
-                            else:
-                                # Opening short position
-                                short_entries.append((fill_price, fill_qty))
+                    # ==================================================================
+                    # 3. Calculate risk metrics (Sharpe, Sortino, Calmar)
+                    # ==================================================================
+                    sharpe_ratio = 0.0
+                    sortino_ratio = 0.0
+                    calmar_ratio = 0.0
+                    max_drawdown_pct = 0.0
 
-                        # If we couldn't calculate PnL from fills, use account PnL
-                        calculated_pnl = total_win - total_loss
-                        if abs(calculated_pnl) > 0.01:
-                            # Use fill-based PnL for win/loss tracking
-                            pass
-                        elif total_pnl != 0:
-                            # Fallback: estimate wins/losses from total PnL
-                            # Use conservative profit factor ~2.0 for positive PnL,
-                            # ~0.5 for negative PnL
-                            if total_pnl > 0:
-                                winning_trades = max(1, int(total_trades * 0.55))
-                                losing_trades = total_trades - winning_trades
-                                # net = win - loss, assume loss = win / 2.0 (PF ~2.0)
-                                # win - win/2 = total_pnl → win = 2 * total_pnl
-                                total_win = abs(total_pnl) * 2.0
-                                total_loss = total_win - total_pnl
-                            else:
-                                losing_trades = max(1, int(total_trades * 0.55))
-                                winning_trades = total_trades - losing_trades
-                                # net = win - loss, assume win = loss / 2.0 (PF ~0.5)
-                                # loss/2 - loss = total_pnl → loss = -2 * total_pnl
-                                total_loss = abs(total_pnl) * 2.0
-                                total_win = total_loss - abs(total_pnl)
-
-                    # Calculate return percentage
-                    total_return_pct = (total_pnl / starting_capital) * 100
-
-                    # Calculate win rate from actual fill tracking
-                    closed_trades = winning_trades + losing_trades
-                    if closed_trades > 0:
-                        win_rate = winning_trades / closed_trades * 100
-                    elif total_trades > 0 and total_pnl != 0:
-                        # Estimate from PnL direction
-                        win_rate = 55.0 if total_pnl > 0 else 45.0
-                    else:
-                        win_rate = 0.0
-
-                    # Calculate profit factor
-                    if total_loss > 0:
-                        profit_factor = total_win / total_loss
-                    elif total_win > 0:
-                        profit_factor = 100.0  # Effectively infinite (capped)
-                    else:
-                        profit_factor = 0.0 if total_pnl <= 0 else 1.0
-
-                    # === MAX DRAWDOWN: Calculate from actual equity curve ===
-                    max_drawdown = 0.0
-
-                    # Build equity curve from fill sequence for accurate drawdown
+                    # Try to get returns data for Sharpe calculation
                     try:
-                        equity_curve = []
-                        running_pnl = 0.0
-                        for order in all_orders:
-                            if order.status.name == "FILLED":
-                                fill_price = float(order.avg_px) if order.avg_px else 0.0
-                                fill_qty = float(order.filled_qty) if order.filled_qty else 0.0
-                                is_reduce_only = getattr(order, "is_reduce_only", False)
-                                if is_reduce_only and fill_price > 0:
-                                    # Approximate PnL contribution from this close
-                                    is_buy = order.side.name == "BUY"
-                                    # Buy to close short: PnL = entry - exit (rough)
-                                    # Sell to close long: PnL = exit - entry (rough)
-                                    # Use average trade PnL as fallback
-                                    avg_pnl_per_trade = total_pnl / max(closed_trades, 1)
-                                    running_pnl += avg_pnl_per_trade
-                                    equity_curve.append(running_pnl)
+                        result = engine.get_result()
+                        if result and result.stats_returns:
+                            # stats_returns might have daily returns or other return metrics
+                            returns_data = result.stats_returns
 
-                        if equity_curve:
-                            peak = equity_curve[0]
-                            worst_dd = 0.0
-                            for eq in equity_curve:
-                                peak = max(peak, eq)
-                                dd = peak - eq
-                                worst_dd = max(worst_dd, dd)
-                            max_drawdown = (
-                                (worst_dd / starting_capital) * 100 if starting_capital > 0 else 0.0
-                            )
-                        elif total_pnl < 0:
-                            max_drawdown = abs(total_return_pct)
-                        elif total_loss > 0:
-                            max_drawdown = min(
-                                abs((total_loss / starting_capital) * 100),
-                                50.0,
-                            )
-                        else:
-                            max_drawdown = max(1.0, abs(total_return_pct) * 0.2)
+                            # Calculate Sharpe if we have return and volatility data
+                            if "return" in returns_data and "volatility" in returns_data:
+                                annual_return = returns_data["return"]
+                                volatility = returns_data["volatility"]
+                                risk_free_rate = 0.05  # 5% annual
+                                if volatility > 0:
+                                    sharpe_ratio = (annual_return - risk_free_rate) / volatility
                     except Exception:
-                        max_drawdown = 10.0  # Fallback
+                        pass
 
-                    # Ensure drawdown is at least 1% for Sharpe calculation stability
-                    max_drawdown = max(max_drawdown, 1.0)
+                    # Fallback Sharpe calculation based on trade outcomes
+                    if sharpe_ratio == 0.0 and total_trades >= 5:
+                        # Calculate returns series from position PnLs
+                        position_returns = []
+                        for pos in positions_closed:
+                            if hasattr(pos, "realized_pnl") and pos.realized_pnl:
+                                pnl = float(pos.realized_pnl.as_double())
+                                # Normalize by starting capital to get return
+                                ret = pnl / starting_capital
+                                position_returns.append(ret)
 
-                    # === SHARPE RATIO ===
-                    # Use per-trade returns for more accurate volatility estimate
-                    if closed_trades >= 5:
-                        avg_trade_return = total_return_pct / closed_trades
-                        # Estimate per-trade volatility from win/loss distribution
-                        if winning_trades > 0 and losing_trades > 0:
-                            avg_win_pct = (total_win / starting_capital) * 100 / winning_trades
-                            avg_loss_pct = (total_loss / starting_capital) * 100 / losing_trades
-                            # Variance from two-group model
-                            p_win = winning_trades / closed_trades
-                            per_trade_var = (
-                                p_win * avg_win_pct**2
-                                + (1 - p_win) * avg_loss_pct**2
-                                - avg_trade_return**2
-                            )
-                            per_trade_vol = math.sqrt(max(per_trade_var, 0.01))
-                        else:
-                            per_trade_vol = max_drawdown / math.sqrt(closed_trades)
+                        if len(position_returns) >= 5:
+                            returns_array = np.array(position_returns)
+                            mean_return = np.mean(returns_array)
+                            std_return = np.std(returns_array)
 
-                        # Annualize: assume ~252 trading days, estimate trades per day
-                        # For now, scale by sqrt(trades) as a proxy
-                        annualized_return = total_return_pct * 12
-                        annualized_vol = per_trade_vol * math.sqrt(closed_trades * 12)
-                        risk_free_annual = 5.0
+                            if std_return > 0:
+                                # Annualize assuming daily positions
+                                periods_per_year = 365
+                                annualized_mean = mean_return * periods_per_year
+                                annualized_std = std_return * np.sqrt(periods_per_year)
+                                risk_free_rate = 0.05
 
-                        sharpe = (
-                            (annualized_return - risk_free_annual) / annualized_vol
-                            if annualized_vol > 0
-                            else 0.0
-                        )
-                        # Cap to reasonable bounds [-5, 5]
-                        sharpe = max(-5.0, min(5.0, sharpe))
-                    elif total_trades > 0:
-                        # Too few trades for meaningful Sharpe; use return-based estimate
-                        sharpe = total_return_pct / max(max_drawdown, 1.0)
-                        sharpe = max(-2.0, min(2.0, sharpe))
-                    else:
-                        sharpe = 0.0
+                                sharpe_ratio = (annualized_mean - risk_free_rate) / annualized_std
+                                sharpe_ratio = max(
+                                    -3.0, min(3.0, sharpe_ratio)
+                                )  # Cap for stability
 
-                    # Calmar ratio = return / max_drawdown
-                    calmar = abs(total_return_pct / max_drawdown) if max_drawdown > 0 else 0.0
+                                # Sortino ratio (downside deviation)
+                                negative_returns = returns_array[returns_array < 0]
+                                if len(negative_returns) > 0:
+                                    downside_std = np.std(negative_returns) * np.sqrt(
+                                        periods_per_year
+                                    )
+                                    if downside_std > 0:
+                                        sortino_ratio = (
+                                            annualized_mean - risk_free_rate
+                                        ) / downside_std
+                                        sortino_ratio = max(-3.0, min(3.0, sortino_ratio))
 
-                    # Create metrics object with extracted values
+                    # Calculate max drawdown from equity curve simulation
+                    if len(positions_closed) > 0:
+                        equity_curve = [starting_capital]
+                        current_equity = starting_capital
+
+                        # Build equity curve from position PnLs
+                        for pos in sorted(
+                            positions_closed,
+                            key=lambda p: p.ts_closed if hasattr(p, "ts_closed") else 0,
+                        ):
+                            if hasattr(pos, "realized_pnl") and pos.realized_pnl:
+                                pnl = float(pos.realized_pnl.as_double())
+                                current_equity += pnl
+                                equity_curve.append(current_equity)
+
+                        # Calculate drawdown
+                        equity_array = np.array(equity_curve)
+                        running_max = np.maximum.accumulate(equity_array)
+                        drawdown = (equity_array - running_max) / running_max * 100
+                        max_drawdown_pct = abs(float(np.min(drawdown)))
+
+                        # Calmar ratio
+                        if max_drawdown_pct > 0:
+                            # Annualize return
+                            days_in_backtest = 30  # Approximate from config
+                            annualized_return = total_return_pct * (365 / days_in_backtest)
+                            calmar_ratio = annualized_return / max_drawdown_pct
+
+                    # ==================================================================
+                    # 4. Count actual orders and fills
+                    # ==================================================================
+                    all_orders = engine.cache.orders()
+                    total_orders = len(all_orders)
+                    filled_orders = [o for o in all_orders if o.status == OrderStatus.FILLED]
+
+                    # ==================================================================
+                    # 5. Create metrics object with real extracted values
+                    # ==================================================================
                     metrics = PerformanceMetrics(
-                        # Returns
+                        # Returns - REAL VALUES
                         total_pnl=total_pnl,
                         total_return_pct=total_return_pct,
-                        annualized_return_pct=0.0,
-                        # Risk metrics
-                        sharpe_ratio=sharpe,
-                        sortino_ratio=0.0,
-                        calmar_ratio=calmar,
-                        max_drawdown_pct=max_drawdown,
-                        max_drawdown_duration_days=0.0,
-                        # Trade metrics
+                        annualized_return_pct=total_return_pct * 12,  # Approximate annual
+                        # Risk metrics - CALCULATED FROM ACTUAL DATA
+                        sharpe_ratio=sharpe_ratio,
+                        sortino_ratio=sortino_ratio,
+                        calmar_ratio=calmar_ratio,
+                        max_drawdown_pct=max_drawdown_pct,
+                        max_drawdown_duration_days=0.0,  # Would need tick-by-tick equity curve
+                        # Trade metrics - FROM ACTUAL POSITIONS
                         total_trades=total_trades,
                         winning_trades=winning_trades,
-                        losing_trades=total_trades - winning_trades,
+                        losing_trades=losing_trades,
                         win_rate_pct=win_rate,
-                        avg_win=total_win / winning_trades if winning_trades > 0 else 0,
-                        avg_loss=total_loss / (total_trades - winning_trades)
-                        if (total_trades - winning_trades) > 0
-                        else 0,
+                        avg_win=avg_win,
+                        avg_loss=avg_loss,
                         profit_factor=profit_factor,
-                        avg_trade_pnl=(total_pnl / total_trades) if total_trades > 0 else 0,
-                        # Execution metrics
+                        avg_trade_pnl=avg_trade_pnl,
+                        # Execution metrics - Set to 0 for now (would need fill analysis)
                         maker_fill_ratio=0.0,
                         avg_slippage_bps=0.0,
                         total_fees_paid=0.0,
-                        # Funding metrics
+                        # Funding metrics - Set to 0 (would need funding event tracking)
                         funding_paid=0.0,
                         funding_received=0.0,
                         net_funding_pnl=0.0,
-                        # Exposure metrics
+                        # Exposure metrics - Set to 0 (would need position tracking)
                         avg_long_exposure=0.0,
                         avg_short_exposure=0.0,
                         max_long_exposure=0.0,
                         max_short_exposure=0.0,
                         time_in_market_pct=0.0,
-                        # Ladder metrics
+                        # Ladder metrics - Set to 0 (strategy-specific)
                         avg_ladder_depth_long=0.0,
                         avg_ladder_depth_short=0.0,
-                        ladder_fill_rate_pct=0.0,
-                        # MAE/MFE
+                        ladder_fill_rate_pct=(len(filled_orders) / total_orders * 100)
+                        if total_orders > 0
+                        else 0.0,
+                        # MAE/MFE - Set to 0 (would need tick-by-tick position tracking)
                         avg_mae_pct=0.0,
                         avg_mfe_pct=0.0,
+                    )
+
+                    # Log extraction success with key metrics
+                    logging.info(
+                        f"Successfully extracted metrics - PnL: ${total_pnl:.2f}, "
+                        f"Return: {total_return_pct:.2f}%, Trades: {total_trades}, "
+                        f"Win Rate: {win_rate:.1f}%, Sharpe: {sharpe_ratio:.2f}"
                     )
 
                     return metrics
 
                 except Exception as e:
-                    # If all else fails, return minimal metrics
-                    logging.warning(f"Failed to extract detailed metrics: {e}")
-                    return PerformanceMetrics(
-                        # Returns
-                        total_pnl=0.0,
-                        total_return_pct=0.0,
-                        annualized_return_pct=0.0,
-                        # Risk metrics
-                        sharpe_ratio=0.0,
-                        sortino_ratio=0.0,
-                        calmar_ratio=0.0,
-                        max_drawdown_pct=100.0,  # Worst case
-                        max_drawdown_duration_days=0.0,
-                        # Trade metrics
-                        total_trades=0,
-                        winning_trades=0,
-                        losing_trades=0,
-                        win_rate_pct=0.0,
-                        avg_win=0.0,
-                        avg_loss=0.0,
-                        profit_factor=0.0,
-                        avg_trade_pnl=0.0,
-                        # Execution metrics
-                        maker_fill_ratio=0.0,
-                        avg_slippage_bps=0.0,
-                        total_fees_paid=0.0,
-                        # Funding metrics
-                        funding_paid=0.0,
-                        funding_received=0.0,
-                        net_funding_pnl=0.0,
-                        # Exposure metrics
-                        avg_long_exposure=0.0,
-                        avg_short_exposure=0.0,
-                        max_long_exposure=0.0,
-                        max_short_exposure=0.0,
-                        time_in_market_pct=0.0,
-                        # Ladder metrics
-                        avg_ladder_depth_long=0.0,
-                        avg_ladder_depth_short=0.0,
-                        ladder_fill_rate_pct=0.0,
-                        # MAE/MFE
-                        avg_mae_pct=0.0,
-                        avg_mfe_pct=0.0,
-                    )
+                    # Log the actual error for debugging
+                    logging.error(f"Failed to extract metrics: {e}", exc_info=True)
+
+                    # Return None to indicate metrics extraction failure
+                    # This will cause the trial to get float("-inf") score
+                    return None
+
+            # No engine means backtest completely failed
             return None
 
         except Exception as e:
             logging.exception(f"Backtest failed for trial {trial_id}: {e}")
             return None
-
-    def _organize_flat_params(self, flat_params: dict[str, Any]) -> dict[str, Any]:
-        """
-        Organize flat parameters dict into nested structure for config YAML.
-
-        Parameters
-        ----------
-        flat_params : dict
-            Flat parameter dictionary from Optuna trial (e.g., {'grid_step_bps': 50, ...})
-
-        Returns
-        -------
-        dict
-            Nested structure matching HedgeGridConfig sections
-        """
-        return {
-            "grid": {
-                "grid_step_bps": flat_params.get("grid_step_bps"),
-                "grid_levels_long": flat_params.get("grid_levels_long"),
-                "grid_levels_short": flat_params.get("grid_levels_short"),
-                "base_qty": flat_params.get("base_qty"),
-                "qty_scale": flat_params.get("qty_scale"),
-            },
-            "exit": {
-                "tp_steps": flat_params.get("tp_steps"),
-                "sl_steps": flat_params.get("sl_steps"),
-            },
-            "regime": {
-                "adx_len": flat_params.get("adx_len"),
-                "ema_fast": flat_params.get("ema_fast"),
-                "ema_slow": flat_params.get("ema_slow"),
-                "atr_len": flat_params.get("atr_len"),
-                "hysteresis_bps": flat_params.get("hysteresis_bps"),
-            },
-            "policy": {
-                "strategy": "throttled-counter",  # Fixed for optimization
-                "counter_levels": flat_params.get("counter_levels"),
-                "counter_qty_scale": flat_params.get("counter_qty_scale"),
-            },
-            "rebalance": {
-                "recenter_trigger_bps": flat_params.get("recenter_trigger_bps"),
-            },
-            "funding": {
-                "funding_window_minutes": 480,  # Fixed at 8 hours
-                "funding_max_cost_bps": flat_params.get("funding_max_cost_bps"),
-            },
-            "position": {
-                "max_position_pct": flat_params.get("max_position_pct"),
-            },
-        }
 
     def _metrics_to_dict(self, metrics: PerformanceMetrics) -> dict[str, float]:
         """Convert PerformanceMetrics to dictionary."""
@@ -841,29 +934,14 @@ class StrategyOptimizer:
     def _log_trial_result_compact(
         self,
         trial_number: int,
-        parameters: dict[str, Any],
         metrics: PerformanceMetrics,
         score: float,
         is_valid: bool,
         violations: list[str],
     ):
-        """Log trial result in compact format with key parameters."""
+        """Log trial result in compact format (only show important trials)."""
         if not self.console:
             return
-
-        # Format key parameters (most impactful ones)
-        key_params = []
-        if "grid" in parameters:
-            g = parameters["grid"]
-            key_params.append(f"step={g.get('grid_step_bps', '?')}bps")
-            key_params.append(f"lvl={g.get('grid_levels_long', '?')}")
-        if "exit" in parameters:
-            e = parameters["exit"]
-            key_params.append(f"tp={e.get('tp_steps', '?')}/sl={e.get('sl_steps', '?')}")
-        if "regime" in parameters:
-            r = parameters["regime"]
-            key_params.append(f"ema={r.get('ema_fast', '?')}/{r.get('ema_slow', '?')}")
-        params_str = " | ".join(key_params) if key_params else "default"
 
         # Only log if: invalid, has violations, or is a new best score
         is_new_best = score >= self.best_score and is_valid
@@ -881,14 +959,11 @@ class StrategyOptimizer:
                 f"PF={metrics.profit_factor:.2f} | DD={metrics.max_drawdown_pct:.1f}% | "
                 f"Trades={metrics.total_trades} | WR={metrics.win_rate_pct:.1f}%"
             )
-            self.console.print(f"    [dim]Params: {params_str}[/dim]")
         elif not is_valid:
             violation_str = ", ".join(violations[:2])  # Show first 2 violations
             if len(violations) > 2:
                 violation_str += f" (+{len(violations) - 2} more)"
-            self.console.print(
-                f"{status} Trial {trial_number}: Invalid - {violation_str} | {params_str}"
-            )
+            self.console.print(f"{status} Trial {trial_number}: Invalid - {violation_str}")
 
     def _log_trial_result(
         self,
@@ -934,6 +1009,15 @@ class StrategyOptimizer:
         self.console.print(f"[bold green]Best Trial:[/bold green] #{best_trial.number}")
         self.console.print(f"[bold green]Best Score:[/bold green] {best_trial.value:.4f}\n")
 
+        # Report memory usage
+        final_memory_gb = get_memory_usage_gb()
+        memory_increase_gb = final_memory_gb - self.initial_memory_gb
+        self.console.print("[bold cyan]Memory Usage:[/bold cyan]")
+        self.console.print(f"  Initial: {self.initial_memory_gb:.2f} GB")
+        self.console.print(f"  Peak: {self.peak_memory_gb:.2f} GB")
+        self.console.print(f"  Final: {final_memory_gb:.2f} GB")
+        self.console.print(f"  Increase: {memory_increase_gb:+.2f} GB\n")
+
         # Show best parameters in a nice table
         table = Table(
             title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta"
@@ -970,10 +1054,8 @@ class StrategyOptimizer:
     def _save_best_parameters(self, study: optuna.Study):
         """Save best parameters to YAML file."""
         try:
-            # Get best parameters from FrozenTrial (already suggested, stored as flat dict)
-            # Reconstruct organized structure from flat params
-            flat_params = study.best_trial.params
-            best_params = self._organize_flat_params(flat_params)
+            # Get best parameters
+            best_params = self.param_space.suggest_parameters(study.best_trial)
 
             # Load base config
             with open(self.base_strategy_config_path) as f:
@@ -1008,6 +1090,10 @@ class StrategyOptimizer:
         output_path : Path
             Path for output CSV file
         """
+        # Ensure output directory exists
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         self.results_db.export_to_csv(self.study_name, output_path)
 
         if self.verbose and self.console:

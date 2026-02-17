@@ -168,6 +168,9 @@ class HedgeGridV1(Strategy):
         # On-start position reconciliation flag
         self._positions_reconciled: bool = False
 
+        # Optimization mode flag (set properly in on_start after config load)
+        self._is_optimization_mode: bool = False
+
     def on_start(self) -> None:
         """
         Start the strategy.
@@ -185,7 +188,10 @@ class HedgeGridV1(Strategy):
         # Load hedge grid configuration
         try:
             self._hedge_grid_config = HedgeGridConfigLoader.load(self.config_path)
-            self.log.info(f"Loaded config from {self.config_path}")
+            # Cache optimization mode flag for fast checks
+            self._is_optimization_mode = self._hedge_grid_config.execution.optimization_mode
+            if not self._is_optimization_mode:
+                self.log.info(f"Loaded config from {self.config_path}")
         except Exception as e:
             self.log.error(f"Failed to load config from {self.config_path}: {e}")
             return
@@ -678,17 +684,19 @@ class HedgeGridV1(Strategy):
         self._regime_detector.update_from_bar(detector_bar)
         regime = self._regime_detector.current()
 
-        # Log regime and price with error handling
-        try:
-            warm_status = self._regime_detector.is_warm
-            self.log.info(f"Bar: close={mid:.2f}, regime={regime}, warm={warm_status}")
-        except Exception as e:
-            # Fallback logging if there's an issue with property access
-            self.log.warning(f"Error logging bar info: {e}. Bar close={mid:.2f}")
+        # Log regime and price with error handling (skip in optimization mode)
+        if not self._is_optimization_mode:
+            try:
+                warm_status = self._regime_detector.is_warm
+                self.log.info(f"Bar: close={mid:.2f}, regime={regime}, warm={warm_status}")
+            except Exception as e:
+                # Fallback logging if there's an issue with property access
+                self.log.warning(f"Error logging bar info: {e}. Bar close={mid:.2f}")
 
         # Check if detector is warm enough for trading
         if not self._regime_detector.is_warm:
-            self.log.info("Regime detector not warm yet, skipping trading")
+            if not self._is_optimization_mode:
+                self.log.info("Regime detector not warm yet, skipping trading")
             return
 
         # One-time: reconcile pre-existing positions from previous session

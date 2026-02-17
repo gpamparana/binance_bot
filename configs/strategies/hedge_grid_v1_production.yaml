@@ -1,0 +1,48 @@
+strategy:
+  name: hedge_grid_v1
+  instrument_id: BTCUSDT-PERP.BINANCE
+
+grid:
+  grid_step_bps: 50.0      # 0.5% spacing
+  grid_levels_long: 10      # 10 levels below mid
+  grid_levels_short: 10     # 10 levels above mid
+  base_qty: 0.001           # Base order size
+  qty_scale: 1.1            # 10% increase per level
+
+exit:
+  tp_steps: 2               # Take profit after 2 grid steps
+  sl_steps: 5               # Stop loss after 5 grid steps
+
+rebalance:
+  recenter_trigger_bps: 500.0  # Re-center if price moves 5% from grid center
+  max_inventory_quote: 10000.0 # Max $10,000 inventory
+
+execution:
+  maker_only: true
+  use_post_only_retries: true  # Enable smart retries for live trading
+  retry_attempts: 1             # Single retry attempt (reduced from 3)
+  retry_delay_ms: 100          # Base delay, uses exponential backoff
+  optimization_mode: false      # Normal mode with full logging
+  retry_max_price_deviation_bps: 100  # Only retry if price within 1% of market
+
+funding:
+  funding_window_minutes: 480  # 8 hours
+  funding_max_cost_bps: 10.0   # Max 0.1% funding cost per window
+
+regime:
+  adx_len: 14
+  ema_fast: 21
+  ema_slow: 50
+  atr_len: 14
+  hysteresis_bps: 10.0
+
+position:
+  max_position_size: 0.1
+  max_position_pct: 0.95
+  max_leverage_used: 5.0
+  emergency_liquidation_buffer: 0.15
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 5
+  counter_qty_scale: 0.5

@@ -86,23 +86,23 @@ class TestParameterSpace:
             trial = study.ask()
             params = space.suggest_parameters(trial)
 
-            # Check grid ranges (updated to match param_space.py bounds)
-            assert 25 <= params["grid"]["grid_step_bps"] <= 100
-            assert 5 <= params["grid"]["grid_levels_long"] <= 10
-            assert 5 <= params["grid"]["grid_levels_short"] <= 10
-            assert 0.001 <= params["grid"]["base_qty"] <= 0.005
-            assert 1.0 <= params["grid"]["qty_scale"] <= 1.1
+            # Check grid ranges (bounds for 1-minute bars)
+            assert 10 <= params["grid"]["grid_step_bps"] <= 50
+            assert 3 <= params["grid"]["grid_levels_long"] <= 5
+            assert 3 <= params["grid"]["grid_levels_short"] <= 5
+            assert 0.001 <= params["grid"]["base_qty"] <= 0.01
+            assert 1.0 <= params["grid"]["qty_scale"] <= 1.2
 
             # Check exit ranges
             assert 1 <= params["exit"]["tp_steps"] <= 10
             assert 3 <= params["exit"]["sl_steps"] <= 20
 
-            # Check regime ranges
-            assert 7 <= params["regime"]["adx_len"] <= 30
-            assert 5 <= params["regime"]["ema_fast"] <= 25
-            assert 20 <= params["regime"]["ema_slow"] <= 60
-            assert 7 <= params["regime"]["atr_len"] <= 30
-            assert 5 <= params["regime"]["hysteresis_bps"] <= 50
+            # Check regime ranges (shorter periods for 1-minute bars)
+            assert 7 <= params["regime"]["adx_len"] <= 21
+            assert 5 <= params["regime"]["ema_fast"] <= 15
+            assert 15 <= params["regime"]["ema_slow"] <= 50
+            assert 7 <= params["regime"]["atr_len"] <= 21
+            assert 5 <= params["regime"]["hysteresis_bps"] <= 30
 
     def test_ema_relationship_enforcement(self):
         """Test that EMA fast is always less than EMA slow."""

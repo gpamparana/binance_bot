@@ -49,10 +49,18 @@ class NormalizationBounds:
 class MetricStatistics:
     """Tracks statistics for normalizing metrics across trials."""
 
-    sharpe_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(-1.0, 5.0))
-    profit_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(0.5, 3.0))
-    calmar_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(-1.0, 5.0))
-    drawdown_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(0.0, 50.0))
+    sharpe_bounds: NormalizationBounds = field(
+        default_factory=lambda: NormalizationBounds(-1.0, 5.0)
+    )
+    profit_bounds: NormalizationBounds = field(
+        default_factory=lambda: NormalizationBounds(0.5, 3.0)
+    )
+    calmar_bounds: NormalizationBounds = field(
+        default_factory=lambda: NormalizationBounds(-1.0, 5.0)
+    )
+    drawdown_bounds: NormalizationBounds = field(
+        default_factory=lambda: NormalizationBounds(0.0, 50.0)
+    )
 
     # Track observed values for adaptive normalization
     observed_sharpe: list[float] = field(default_factory=list)
@@ -60,7 +68,9 @@ class MetricStatistics:
     observed_calmar: list[float] = field(default_factory=list)
     observed_drawdown: list[float] = field(default_factory=list)
 
-    def update_bounds_from_observations(self, percentile_low: float = 5, percentile_high: float = 95):
+    def update_bounds_from_observations(
+        self, percentile_low: float = 5, percentile_high: float = 95
+    ):
         """
         Update normalization bounds based on observed values.
 
@@ -76,25 +86,25 @@ class MetricStatistics:
         if len(self.observed_sharpe) >= 10:
             self.sharpe_bounds = NormalizationBounds(
                 np.percentile(self.observed_sharpe, percentile_low),
-                np.percentile(self.observed_sharpe, percentile_high)
+                np.percentile(self.observed_sharpe, percentile_high),
             )
 
         if len(self.observed_profit) >= 10:
             self.profit_bounds = NormalizationBounds(
                 np.percentile(self.observed_profit, percentile_low),
-                np.percentile(self.observed_profit, percentile_high)
+                np.percentile(self.observed_profit, percentile_high),
             )
 
         if len(self.observed_calmar) >= 10:
             self.calmar_bounds = NormalizationBounds(
                 np.percentile(self.observed_calmar, percentile_low),
-                np.percentile(self.observed_calmar, percentile_high)
+                np.percentile(self.observed_calmar, percentile_high),
             )
 
         if len(self.observed_drawdown) >= 10:
             self.drawdown_bounds = NormalizationBounds(
                 np.percentile(self.observed_drawdown, percentile_low),
-                np.percentile(self.observed_drawdown, percentile_high)
+                np.percentile(self.observed_drawdown, percentile_high),
             )
 
 
@@ -123,9 +133,7 @@ class MultiObjectiveFunction:
     """
 
     def __init__(
-        self,
-        weights: ObjectiveWeights | None = None,
-        adaptive_normalization: bool = True
+        self, weights: ObjectiveWeights | None = None, adaptive_normalization: bool = True
     ):
         """
         Initialize multi-objective function.
@@ -171,16 +179,27 @@ class MultiObjectiveFunction:
             max_dd = metrics.max_drawdown_pct if metrics.max_drawdown_pct is not None else 100.0
 
             # Handle invalid metrics
-            if math.isnan(sharpe) or math.isnan(profit_factor) or math.isnan(calmar) or math.isnan(max_dd):
+            if (
+                math.isnan(sharpe)
+                or math.isnan(profit_factor)
+                or math.isnan(calmar)
+                or math.isnan(max_dd)
+            ):
                 return float("-inf")
 
             # Check for extreme/invalid values
             if max_dd >= 100.0:  # Complete loss
                 return float("-inf")
 
-            if metrics.total_trades is not None and metrics.total_trades < 10:
-                # Too few trades to be meaningful
+            # Check for no trading activity
+            if metrics.total_trades is None or metrics.total_trades == 0:
+                # No trades at all - complete failure
                 return float("-inf")
+
+            if metrics.total_trades < 5:
+                # Too few trades to be meaningful - heavily penalize but not -inf
+                # This allows optimizer to differentiate between complete failures
+                return -1000.0
 
             # Track observations for adaptive normalization
             self.statistics.observed_sharpe.append(sharpe)
@@ -201,10 +220,10 @@ class MultiObjectiveFunction:
 
             # Calculate weighted score
             score = (
-                self.weights.sharpe_ratio * norm_sharpe +
-                self.weights.profit_factor * norm_profit +
-                self.weights.calmar_ratio * norm_calmar +
-                self.weights.drawdown_penalty * norm_drawdown  # Penalty (negative weight)
+                self.weights.sharpe_ratio * norm_sharpe
+                + self.weights.profit_factor * norm_profit
+                + self.weights.calmar_ratio * norm_calmar
+                + self.weights.drawdown_penalty * norm_drawdown  # Penalty (negative weight)
             )
 
             return score

@@ -188,9 +188,9 @@ class TestMultiObjectiveFunction:
             calmar_ratio=2.0,
             max_drawdown_pct=5.0,
             max_drawdown_duration_days=10,
-            total_trades=5,  # Too few
-            winning_trades=3,
-            losing_trades=2,
+            total_trades=3,  # Too few (below 5-trade minimum)
+            winning_trades=2,
+            losing_trades=1,
             win_rate_pct=60.0,
             avg_win=20.0,
             avg_loss=-10.0,
@@ -216,8 +216,8 @@ class TestMultiObjectiveFunction:
 
         score = func.calculate_score(metrics)
 
-        # Should return -inf for too few trades
-        assert score == float("-inf")
+        # Should return -1000 for too few trades (allows optimizer to differentiate)
+        assert score == -1000.0
 
     def test_calculate_score_complete_loss(self):
         """Test that complete loss strategies are rejected."""

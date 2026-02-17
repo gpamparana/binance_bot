@@ -98,6 +98,16 @@ class ExecutionConfig(BaseModel):
         le=5000,
         description="Delay between retries in milliseconds",
     )
+    optimization_mode: bool = Field(
+        default=False,
+        description="Run in optimization mode with reduced logging and no retries",
+    )
+    retry_max_price_deviation_bps: float = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        description="Maximum price deviation from market to attempt retries (100 = 1%)",
+    )
 
 
 class FundingConfig(BaseModel):
