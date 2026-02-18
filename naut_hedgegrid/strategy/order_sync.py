@@ -196,16 +196,10 @@ class OrderDiff:
 
         """
         # Check cache - use structural keys for reliable comparison
-        desired_key = tuple(
-            (l.side, tuple((r.price, r.qty) for r in l.rungs)) for l in desired_ladders
-        )
+        desired_key = tuple((l.side, tuple((r.price, r.qty) for r in l.rungs)) for l in desired_ladders)
         live_key = tuple((o.client_order_id, o.side, o.price, o.qty, o.status) for o in live_orders)
 
-        if (
-            self._last_desired_key == desired_key
-            and self._last_live_key == live_key
-            and self._last_result is not None
-        ):
+        if self._last_desired_key == desired_key and self._last_live_key == live_key and self._last_result is not None:
             return self._last_result
 
         # Flatten and assign client order IDs to desired rungs
@@ -251,9 +245,7 @@ class OrderDiff:
 
                 if not self._matcher.matches(desired_rung, live_order):
                     # Mismatch → replace
-                    replace_intent = self._create_replace_intent(
-                        live_order.client_order_id, desired_rung
-                    )
+                    replace_intent = self._create_replace_intent(live_order.client_order_id, desired_rung)
                     replaces.append(replace_intent)
             else:
                 # No matching live order → create
@@ -299,9 +291,7 @@ class OrderDiff:
 
         return result
 
-    def _apply_precision_guards(
-        self, rungs_with_ids: list[tuple[str, Rung]]
-    ) -> list[tuple[str, Rung]]:
+    def _apply_precision_guards(self, rungs_with_ids: list[tuple[str, Rung]]) -> list[tuple[str, Rung]]:
         """Apply precision guards to filter out invalid rungs.
 
         Args:
@@ -538,8 +528,7 @@ class PostOnlyRetryHandler:
         self._retry_history[client_order_id].append(retry_attempt)
 
         logger.info(
-            f"Retry attempt {attempt} for {client_order_id}: "
-            f"{original_price} -> {adjusted_price} (reason: {reason})"
+            f"Retry attempt {attempt} for {client_order_id}: {original_price} -> {adjusted_price} (reason: {reason})"
         )
 
     def get_retry_history(self, client_order_id: str) -> list[RetryAttempt]:

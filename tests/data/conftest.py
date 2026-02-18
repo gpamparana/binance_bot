@@ -87,9 +87,7 @@ def sample_funding_rates_df():
         {
             "timestamp": pd.to_datetime(["2024-01-01 00:00:00", "2024-01-01 08:00:00"], utc=True),
             "funding_rate": [0.0001, -0.0002],
-            "next_funding_time": pd.to_datetime(
-                ["2024-01-01 08:00:00", "2024-01-01 16:00:00"], utc=True
-            ),
+            "next_funding_time": pd.to_datetime(["2024-01-01 08:00:00", "2024-01-01 16:00:00"], utc=True),
         }
     )
 

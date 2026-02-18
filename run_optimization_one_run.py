@@ -9,9 +9,6 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from naut_hedgegrid.optimization import (
-    ConstraintsValidator,
-    MultiObjectiveFunction,
-    ParameterSpace,
     StrategyOptimizer,
 )
 from naut_hedgegrid.optimization.constraints import ConstraintThresholds
@@ -29,12 +26,12 @@ def main():
     # This allows us to see which parameter sets produce ANY trades
     # After we have some good results, we can tighten these
     constraints = ConstraintThresholds(
-        min_sharpe_ratio=0.0,    # Accept any sharpe (even negative)
+        min_sharpe_ratio=0.0,  # Accept any sharpe (even negative)
         max_drawdown_pct=100.0,  # Accept any drawdown
-        min_trades=1,            # Just need at least 1 trade
-        min_win_rate_pct=0.0,    # Accept any win rate
-        min_profit_factor=0.0,   # Accept any profit factor
-        min_calmar_ratio=0.0     # Accept any calmar
+        min_trades=1,  # Just need at least 1 trade
+        min_win_rate_pct=0.0,  # Accept any win rate
+        min_profit_factor=0.0,  # Accept any profit factor
+        min_calmar_ratio=0.0,  # Accept any calmar
     )
 
     # Initialize optimizer with more trials
@@ -42,11 +39,11 @@ def main():
         backtest_config_path=backtest_config,
         base_strategy_config_path=strategy_config,
         n_trials=10,  # Increased to 10 trials for more thorough testing
-        n_jobs=4,       # Sequential execution (safer for overnight)
+        n_jobs=4,  # Sequential execution (safer for overnight)
         study_name="hedge_grid_optimization_overnight",
         objective_weights=ObjectiveWeights(),  # Use defaults
         constraint_thresholds=constraints,
-        verbose=True
+        verbose=True,
     )
 
     # Run optimization
@@ -59,7 +56,7 @@ def main():
 
     study = optimizer.optimize()
 
-    print(f"\nOptimization complete!")
+    print("\nOptimization complete!")
     print(f"Best score: {study.best_value:.4f}")
     print(f"Best trial: {study.best_trial.number}")
 

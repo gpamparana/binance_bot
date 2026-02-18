@@ -284,9 +284,7 @@ class PrometheusExporter:
         with self.update_lock:
             # Update position metrics
             if "long_inventory_usdt" in metrics_dict:
-                self.long_inventory_quote.labels(instrument=self.instrument_id).set(
-                    metrics_dict["long_inventory_usdt"]
-                )
+                self.long_inventory_quote.labels(instrument=self.instrument_id).set(metrics_dict["long_inventory_usdt"])
 
             if "short_inventory_usdt" in metrics_dict:
                 self.short_inventory_quote.labels(instrument=self.instrument_id).set(
@@ -295,37 +293,25 @@ class PrometheusExporter:
 
             # Calculate net inventory
             if "long_inventory_usdt" in metrics_dict and "short_inventory_usdt" in metrics_dict:
-                net_inventory = (
-                    metrics_dict["long_inventory_usdt"] - metrics_dict["short_inventory_usdt"]
-                )
+                net_inventory = metrics_dict["long_inventory_usdt"] - metrics_dict["short_inventory_usdt"]
                 self.net_inventory_quote.labels(instrument=self.instrument_id).set(net_inventory)
 
             # Update grid metrics
             if "active_rungs_long" in metrics_dict:
-                self.active_rungs_long.labels(instrument=self.instrument_id).set(
-                    metrics_dict["active_rungs_long"]
-                )
+                self.active_rungs_long.labels(instrument=self.instrument_id).set(metrics_dict["active_rungs_long"])
 
             if "active_rungs_short" in metrics_dict:
-                self.active_rungs_short.labels(instrument=self.instrument_id).set(
-                    metrics_dict["active_rungs_short"]
-                )
+                self.active_rungs_short.labels(instrument=self.instrument_id).set(metrics_dict["active_rungs_short"])
 
             if "open_orders_count" in metrics_dict:
-                self.open_orders_count.labels(instrument=self.instrument_id).set(
-                    metrics_dict["open_orders_count"]
-                )
+                self.open_orders_count.labels(instrument=self.instrument_id).set(metrics_dict["open_orders_count"])
 
             # Update risk metrics
             if "margin_ratio" in metrics_dict:
-                self.margin_ratio.labels(instrument=self.instrument_id).set(
-                    metrics_dict["margin_ratio"]
-                )
+                self.margin_ratio.labels(instrument=self.instrument_id).set(metrics_dict["margin_ratio"])
 
             if "maker_ratio" in metrics_dict:
-                self.maker_ratio.labels(instrument=self.instrument_id).set(
-                    metrics_dict["maker_ratio"]
-                )
+                self.maker_ratio.labels(instrument=self.instrument_id).set(metrics_dict["maker_ratio"])
 
             # Update funding metrics
             if "funding_rate_current" in metrics_dict:
@@ -340,14 +326,10 @@ class PrometheusExporter:
 
             # Update PnL metrics
             if "realized_pnl_usdt" in metrics_dict:
-                self.realized_pnl_total.labels(instrument=self.instrument_id).set(
-                    metrics_dict["realized_pnl_usdt"]
-                )
+                self.realized_pnl_total.labels(instrument=self.instrument_id).set(metrics_dict["realized_pnl_usdt"])
 
             if "unrealized_pnl_usdt" in metrics_dict:
-                self.unrealized_pnl_total.labels(instrument=self.instrument_id).set(
-                    metrics_dict["unrealized_pnl_usdt"]
-                )
+                self.unrealized_pnl_total.labels(instrument=self.instrument_id).set(metrics_dict["unrealized_pnl_usdt"])
 
             # Calculate total PnL
             if "realized_pnl_usdt" in metrics_dict and "unrealized_pnl_usdt" in metrics_dict:
@@ -359,9 +341,7 @@ class PrometheusExporter:
             self.strategy_uptime_seconds.labels(instrument=self.instrument_id).set(uptime)
 
             if "last_bar_timestamp" in metrics_dict:
-                self.last_bar_timestamp.labels(instrument=self.instrument_id).set(
-                    metrics_dict["last_bar_timestamp"]
-                )
+                self.last_bar_timestamp.labels(instrument=self.instrument_id).set(metrics_dict["last_bar_timestamp"])
 
         logger.debug(f"Updated {len(metrics_dict)} metrics for {self.instrument_id}")
 

@@ -152,16 +152,12 @@ def backtest(
         strat_configs = []
         for strat_config_entry in bt_config.strategies:
             if not strat_config_entry.enabled:
-                console.print(
-                    f"[yellow]⚠[/yellow] Strategy {strat_config_entry.config_path} disabled, skipping"
-                )
+                console.print(f"[yellow]⚠[/yellow] Strategy {strat_config_entry.config_path} disabled, skipping")
                 continue
 
             strat_config_path = Path(strat_config_entry.config_path)
             if not strat_config_path.exists():
-                console.print(
-                    f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]"
-                )
+                console.print(f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]")
                 continue
 
             # Load HedgeGridConfig
@@ -201,7 +197,7 @@ def backtest(
         catalog = runner.setup_catalog()
 
         # Run backtest
-        engine, data = runner.run(catalog)
+        engine, _data = runner.run(catalog)
 
         # Extract results
         console.print("[bold]Extracting results...[/bold]")
@@ -550,12 +546,8 @@ def flatten(
 
     except requests.exceptions.ConnectionError:
         console.print(f"\n[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print(
-            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
-        )
-        console.print(
-            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
-        )
+        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
+        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"\n[red]HTTP Error: {e}[/red]")
@@ -658,16 +650,6 @@ def status(
             table.add_column("Value", style="magenta")
 
             # Group metrics by category
-            position_metrics = [
-                "long_inventory_usdt",
-                "short_inventory_usdt",
-                "net_inventory_usdt",
-            ]
-            grid_metrics = ["active_rungs_long", "active_rungs_short", "open_orders_count"]
-            risk_metrics = ["margin_ratio", "maker_ratio"]
-            funding_metrics = ["funding_rate_current", "funding_cost_1h_projected_usdt"]
-            pnl_metrics = ["realized_pnl_usdt", "unrealized_pnl_usdt", "total_pnl_usdt"]
-            health_metrics = ["uptime_seconds", "last_bar_timestamp"]
 
             # Add rows with formatting
             for key, value in metrics.items():
@@ -690,12 +672,8 @@ def status(
 
     except requests.exceptions.ConnectionError:
         console.print(f"[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print(
-            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
-        )
-        console.print(
-            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
-        )
+        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
+        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"[red]HTTP Error: {e}[/red]")
@@ -812,12 +790,8 @@ def metrics(
 
     except requests.exceptions.ConnectionError:
         console.print(f"[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print(
-            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
-        )
-        console.print(
-            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
-        )
+        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
+        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"[red]HTTP Error: {e}[/red]")

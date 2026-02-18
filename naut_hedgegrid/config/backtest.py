@@ -34,9 +34,7 @@ class DataTypeConfig(BaseModel):
         "FundingRate",
         "Bar",
     ] = Field(description="Data type name")
-    depth: int | None = Field(
-        default=None, ge=1, le=100, description="Order book depth (if applicable)"
-    )
+    depth: int | None = Field(default=None, ge=1, le=100, description="Order book depth (if applicable)")
 
 
 class InstrumentDataConfig(BaseModel):
@@ -88,9 +86,7 @@ class LatencyConfig(BaseModel):
 class FillModelConfig(BaseModel):
     """Fill simulation configuration."""
 
-    type: Literal["naive", "realistic", "probabilistic"] = Field(
-        default="realistic", description="Fill model type"
-    )
+    type: Literal["naive", "realistic", "probabilistic"] = Field(default="realistic", description="Fill model type")
     maker_fill_prob: float = Field(
         default=0.9,
         ge=0,
@@ -125,12 +121,8 @@ class ExecutionSimConfig(BaseModel):
 class RiskControlConfig(BaseModel):
     """Risk control configuration."""
 
-    max_drawdown_pct: float = Field(
-        default=20.0, gt=0, le=100, description="Max drawdown percentage"
-    )
-    max_daily_loss_pct: float = Field(
-        default=5.0, gt=0, le=100, description="Max daily loss percentage"
-    )
+    max_drawdown_pct: float = Field(default=20.0, gt=0, le=100, description="Max drawdown percentage")
+    max_daily_loss_pct: float = Field(default=5.0, gt=0, le=100, description="Max daily loss percentage")
     stop_on_liquidation: bool = Field(default=True, description="Stop backtest on liquidation")
 
 
@@ -141,9 +133,7 @@ class OutputConfig(BaseModel):
     save_trades: bool = Field(default=True, description="Save trade records")
     save_positions: bool = Field(default=True, description="Save position records")
     save_account_state: bool = Field(default=True, description="Save account state snapshots")
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
-        default="INFO", description="Console logging level"
-    )
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO", description="Console logging level")
     log_level_file: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = Field(
         default="INFO", description="File logging level (None to disable file logging)"
     )
@@ -170,18 +160,14 @@ class MetricsConfig(BaseModel):
         description="Metrics to calculate",
     )
     risk_free_rate: float = Field(default=0.04, ge=0, le=1, description="Annual risk-free rate")
-    periods_per_year: int = Field(
-        default=365, ge=1, description="Periods per year for annualization"
-    )
+    periods_per_year: int = Field(default=365, ge=1, description="Periods per year for annualization")
 
 
 class DataConfig(BaseModel):
     """Data loading configuration."""
 
     catalog_path: str = Field(description="Path to data catalog")
-    instruments: list[InstrumentDataConfig] = Field(
-        description="Instruments and data types to load"
-    )
+    instruments: list[InstrumentDataConfig] = Field(description="Instruments and data types to load")
     sources: list[DataSourceConfig] = Field(description="Data sources")
 
 

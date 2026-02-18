@@ -513,9 +513,7 @@ class TestConvertDataFrameToNautilus:
         """Test conversion of funding rate DataFrame to dict objects."""
         instrument_id = InstrumentId.from_str("BTCUSDT-PERP.BINANCE")
 
-        funding_updates = convert_dataframe_to_nautilus(
-            sample_funding_rates_df, "funding", instrument_id
-        )
+        funding_updates = convert_dataframe_to_nautilus(sample_funding_rates_df, "funding", instrument_id)
 
         assert len(funding_updates) == len(sample_funding_rates_df)
         assert all(update["type"] == "FundingRate" for update in funding_updates)

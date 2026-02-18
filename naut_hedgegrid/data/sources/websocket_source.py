@@ -131,9 +131,7 @@ class WebSocketDataSource(DataSource):
 
         if not trades:
             logger.warning(f"No trades found for {symbol}")
-            return pd.DataFrame(
-                columns=["timestamp", "price", "size", "aggressor_side", "trade_id"]
-            )
+            return pd.DataFrame(columns=["timestamp", "price", "size", "aggressor_side", "trade_id"])
 
         df = pd.DataFrame(trades)
         logger.info(f"Loaded {len(df):,} trades")
@@ -204,9 +202,7 @@ class WebSocketDataSource(DataSource):
         logger.info(f"Loaded {len(df):,} mark prices")
         return df
 
-    async def fetch_funding_rates(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
         Fetch funding rate data from JSONL file.
 
@@ -273,9 +269,7 @@ class WebSocketDataSource(DataSource):
 
             funding_rate = float(data.get("r", 0.0))
             next_funding_ms = data.get("T", 0)
-            next_funding_time = (
-                pd.Timestamp(next_funding_ms, unit="ms", tz="UTC") if next_funding_ms else None
-            )
+            next_funding_time = pd.Timestamp(next_funding_ms, unit="ms", tz="UTC") if next_funding_ms else None
 
             funding_rates.append(
                 {

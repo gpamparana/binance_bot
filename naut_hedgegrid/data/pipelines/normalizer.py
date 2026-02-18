@@ -199,9 +199,7 @@ def normalize_funding_rates(df: pd.DataFrame, source_type: str = "unknown") -> p
         # Handle None/NaN values
         mask = df["next_funding_time"].notna()
         if mask.any():
-            df.loc[mask, "next_funding_time"] = _normalize_timestamp(
-                df.loc[mask, "next_funding_time"]
-            )
+            df.loc[mask, "next_funding_time"] = _normalize_timestamp(df.loc[mask, "next_funding_time"])
     else:
         df["next_funding_time"] = None
 

@@ -147,9 +147,7 @@ class KillSwitch:
         )
         self._monitor_thread.start()
 
-        self.logger.info(
-            f"Kill switch monitoring started (check interval: {self.config.check_interval_seconds}s)"
-        )
+        self.logger.info(f"Kill switch monitoring started (check interval: {self.config.check_interval_seconds}s)")
 
     def stop_monitoring(self) -> None:
         """
@@ -325,9 +323,7 @@ class KillSwitch:
         # Calculate session drawdown
         session_drawdown_amount = self._session_peak_pnl - current_pnl
         session_drawdown_pct = (
-            (session_drawdown_amount / abs(self._session_peak_pnl)) * 100
-            if abs(self._session_peak_pnl) > 0
-            else 0.0
+            (session_drawdown_amount / abs(self._session_peak_pnl)) * 100 if abs(self._session_peak_pnl) > 0 else 0.0
         )
 
         # Check session drawdown threshold
@@ -344,9 +340,7 @@ class KillSwitch:
         if self.config.daily_loss_limit_usdt is not None:
             daily_drawdown_amount = self._daily_peak_pnl - current_pnl
             daily_drawdown_pct = (
-                (daily_drawdown_amount / abs(self._daily_peak_pnl)) * 100
-                if abs(self._daily_peak_pnl) > 0
-                else 0.0
+                (daily_drawdown_amount / abs(self._daily_peak_pnl)) * 100 if abs(self._daily_peak_pnl) > 0 else 0.0
             )
 
             if daily_drawdown_pct > self.config.max_drawdown_pct:
@@ -479,7 +473,10 @@ class KillSwitch:
             )
 
         # Flatten positions
-        reason = f"{breaker_type} circuit breaker triggered (current={current_value:.2f}{unit}, threshold={threshold:.2f}{unit})"
+        reason = (
+            f"{breaker_type} circuit breaker triggered "
+            f"(current={current_value:.2f}{unit}, threshold={threshold:.2f}{unit})"
+        )
         result = self.flatten_now("both", reason)
 
         # Only mark as triggered after successful flatten (allows retry on failure)

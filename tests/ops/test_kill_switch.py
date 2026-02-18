@@ -336,9 +336,7 @@ class TestCircuitBreakers:
 
         kill_switch._check_loss_limit_circuit(mock_strategy.get_operational_metrics())
 
-    def test_circuit_breaker_only_triggers_once(
-        self, kill_switch, mock_strategy, mock_alert_manager
-    ):
+    def test_circuit_breaker_only_triggers_once(self, kill_switch, mock_strategy, mock_alert_manager):
         """Test that circuit breaker only triggers once per day."""
         # Set up breach condition
         mock_strategy.get_operational_metrics.return_value = {
@@ -494,10 +492,7 @@ class TestIntegration:
         time.sleep(0.2)
 
         # Should log error but continue
-        assert (
-            "Error in monitoring loop" in caplog.text
-            or "Error checking safety circuits" in caplog.text
-        )
+        assert "Error in monitoring loop" in caplog.text or "Error checking safety circuits" in caplog.text
 
         # Should still be monitoring
         assert kill_switch._monitoring is True

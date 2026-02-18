@@ -97,9 +97,7 @@ class FlattenResponse(BaseModel):
 class ThrottleRequest(BaseModel):
     """Set throttle request."""
 
-    throttle: float = Field(
-        ..., ge=0.0, le=1.0, description="Throttle value: 0.0 (passive) to 1.0 (aggressive)"
-    )
+    throttle: float = Field(..., ge=0.0, le=1.0, description="Throttle value: 0.0 (passive) to 1.0 (aggressive)")
 
 
 class ThrottleResponse(BaseModel):
@@ -242,9 +240,7 @@ class StrategyAPI:
             future = self._callback_executor.submit(self._raw_strategy_callback, operation, kwargs)
             return future.result(timeout=self._callback_timeout)
         except concurrent.futures.TimeoutError:
-            logger.error(
-                f"Strategy callback '{operation}' timed out after {self._callback_timeout}s"
-            )
+            logger.error(f"Strategy callback '{operation}' timed out after {self._callback_timeout}s")
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail=f"Strategy callback '{operation}' timed out",
@@ -363,9 +359,7 @@ class StrategyAPI:
                 raise HTTPException(status_code=500, detail=f"Failed to stop: {e}") from e
 
         @self.app.post("/flatten", response_model=FlattenResponse, tags=["Operations"])
-        async def flatten_positions(
-            request: FlattenRequest, x_api_key: str | None = Header(None)
-        ) -> FlattenResponse:
+        async def flatten_positions(request: FlattenRequest, x_api_key: str | None = Header(None)) -> FlattenResponse:
             """Emergency flatten - cancel orders and close positions.
 
             This is an emergency operation that:
@@ -377,9 +371,7 @@ class StrategyAPI:
             self._validate_api_key(x_api_key)
 
             if request.side not in ("long", "short", "both"):
-                raise HTTPException(
-                    status_code=400, detail="Invalid side. Must be 'long', 'short', or 'both'"
-                )
+                raise HTTPException(status_code=400, detail="Invalid side. Must be 'long', 'short', or 'both'")
 
             try:
                 result = self.strategy_callback("flatten", {"side": request.side})
@@ -395,9 +387,7 @@ class StrategyAPI:
                 raise HTTPException(status_code=500, detail=f"Failed to flatten: {e}") from e
 
         @self.app.post("/set-throttle", response_model=ThrottleResponse, tags=["Configuration"])
-        async def set_throttle(
-            request: ThrottleRequest, x_api_key: str | None = Header(None)
-        ) -> ThrottleResponse:
+        async def set_throttle(request: ThrottleRequest, x_api_key: str | None = Header(None)) -> ThrottleResponse:
             """Adjust strategy aggressiveness (throttle).
 
             Throttle controls how aggressively the strategy places orders:

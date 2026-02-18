@@ -15,7 +15,6 @@ from typing import Any
 import pandas as pd
 import typer
 from nautilus_trader.model.data import BarType
-from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
@@ -69,9 +68,7 @@ def create_source(source_type: str, config: dict[str, Any]) -> DataSource:
     }
 
     if source_type not in sources:
-        raise ValueError(
-            f"Unknown source type: {source_type}. " f"Available: {list(sources.keys())}"
-        )
+        raise ValueError(f"Unknown source type: {source_type}. Available: {list(sources.keys())}")
 
     source_class = sources[source_type]
 
@@ -293,9 +290,7 @@ def write_to_catalog(
     if "mark" in data and not data["mark"].empty:
         # Create BarType for 1-minute mark price bars
         # Format: BTCUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL
-        bar_type = BarType.from_str(
-            f"{instrument_id.value}-1-MINUTE-LAST-EXTERNAL"
-        )
+        bar_type = BarType.from_str(f"{instrument_id.value}-1-MINUTE-LAST-EXTERNAL")
 
         # Convert mark price OHLCV data to Nautilus bars
         bars = mark_prices_to_bars(data["mark"], bar_type)
@@ -424,9 +419,7 @@ app = typer.Typer(
 
 @app.command()
 def main(
-    source: str = typer.Option(
-        "binance", "--source", "-s", help="Data source: binance, tardis, csv, websocket"
-    ),
+    source: str = typer.Option("binance", "--source", "-s", help="Data source: binance, tardis, csv, websocket"),
     symbol: str = typer.Option("BTCUSDT", "--symbol", help="Trading symbol"),
     start: str = typer.Option(..., "--start", help="Start date (YYYY-MM-DD)"),
     end: str = typer.Option(..., "--end", help="End date (YYYY-MM-DD)"),
@@ -438,9 +431,7 @@ def main(
         help="Comma-separated data types to fetch",
     ),
     exchange: str = typer.Option("BINANCE", "--exchange", "-e", help="Exchange name"),
-    config_file: str | None = typer.Option(
-        None, "--config", "-c", help="Source configuration file (JSON/YAML)"
-    ),
+    config_file: str | None = typer.Option(None, "--config", "-c", help="Source configuration file (JSON/YAML)"),
 ) -> None:
     """
     Run data pipeline to convert market data to Nautilus catalog.

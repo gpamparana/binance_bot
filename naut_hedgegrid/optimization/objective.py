@@ -49,18 +49,10 @@ class NormalizationBounds:
 class MetricStatistics:
     """Tracks statistics for normalizing metrics across trials."""
 
-    sharpe_bounds: NormalizationBounds = field(
-        default_factory=lambda: NormalizationBounds(-1.0, 5.0)
-    )
-    profit_bounds: NormalizationBounds = field(
-        default_factory=lambda: NormalizationBounds(0.5, 3.0)
-    )
-    calmar_bounds: NormalizationBounds = field(
-        default_factory=lambda: NormalizationBounds(-1.0, 5.0)
-    )
-    drawdown_bounds: NormalizationBounds = field(
-        default_factory=lambda: NormalizationBounds(0.0, 50.0)
-    )
+    sharpe_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(-1.0, 5.0))
+    profit_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(0.5, 3.0))
+    calmar_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(-1.0, 5.0))
+    drawdown_bounds: NormalizationBounds = field(default_factory=lambda: NormalizationBounds(0.0, 50.0))
 
     # Track observed values for adaptive normalization
     observed_sharpe: list[float] = field(default_factory=list)
@@ -68,9 +60,7 @@ class MetricStatistics:
     observed_calmar: list[float] = field(default_factory=list)
     observed_drawdown: list[float] = field(default_factory=list)
 
-    def update_bounds_from_observations(
-        self, percentile_low: float = 5, percentile_high: float = 95
-    ):
+    def update_bounds_from_observations(self, percentile_low: float = 5, percentile_high: float = 95):
         """
         Update normalization bounds based on observed values.
 
@@ -132,9 +122,7 @@ class MultiObjectiveFunction:
         Whether to update bounds based on observations
     """
 
-    def __init__(
-        self, weights: ObjectiveWeights | None = None, adaptive_normalization: bool = True
-    ):
+    def __init__(self, weights: ObjectiveWeights | None = None, adaptive_normalization: bool = True):
         """
         Initialize multi-objective function.
 
@@ -179,12 +167,7 @@ class MultiObjectiveFunction:
             max_dd = metrics.max_drawdown_pct if metrics.max_drawdown_pct is not None else 100.0
 
             # Handle invalid metrics
-            if (
-                math.isnan(sharpe)
-                or math.isnan(profit_factor)
-                or math.isnan(calmar)
-                or math.isnan(max_dd)
-            ):
+            if math.isnan(sharpe) or math.isnan(profit_factor) or math.isnan(calmar) or math.isnan(max_dd):
                 return float("-inf")
 
             # Check for extreme/invalid values

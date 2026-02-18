@@ -184,12 +184,8 @@ class ADX:
             assert self._smoothed_minus_dm is not None
 
             self._smoothed_tr = (self._smoothed_tr * (self.period - 1) + tr) / self.period
-            self._smoothed_plus_dm = (
-                self._smoothed_plus_dm * (self.period - 1) + plus_dm
-            ) / self.period
-            self._smoothed_minus_dm = (
-                self._smoothed_minus_dm * (self.period - 1) + minus_dm
-            ) / self.period
+            self._smoothed_plus_dm = (self._smoothed_plus_dm * (self.period - 1) + plus_dm) / self.period
+            self._smoothed_minus_dm = (self._smoothed_minus_dm * (self.period - 1) + minus_dm) / self.period
 
         # Calculate +DI and -DI
         if self._smoothed_tr > 0:
@@ -398,11 +394,7 @@ class RegimeDetector:
         spread_bps = ((fast_value - slow_value) / slow_value) * 10000
 
         # Check ADX for trend strength (if available)
-        if (
-            self.adx.is_warm
-            and self.adx.value is not None
-            and self.adx.value < self.ADX_TREND_THRESHOLD
-        ):
+        if self.adx.is_warm and self.adx.value is not None and self.adx.value < self.ADX_TREND_THRESHOLD:
             # Weak trend - classify as SIDEWAYS
             self._current_regime = Regime.SIDEWAYS
             return
@@ -426,12 +418,7 @@ class RegimeDetector:
             True if all indicators are warmed up
 
         """
-        return (
-            self.ema_fast.is_warm
-            and self.ema_slow.is_warm
-            and self.adx.is_warm
-            and self.atr.is_warm
-        )
+        return self.ema_fast.is_warm and self.ema_slow.is_warm and self.adx.is_warm and self.atr.is_warm
 
     def reset(self) -> None:
         """Reset all indicators and regime state."""

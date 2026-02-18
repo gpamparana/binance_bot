@@ -187,9 +187,7 @@ class ParallelBacktestRunner:
         failed_tasks = []
 
         if self.verbose and self.console:
-            self.console.print(
-                f"[cyan]Running {len(tasks)} backtests with {self.n_workers} workers[/cyan]"
-            )
+            self.console.print(f"[cyan]Running {len(tasks)} backtests with {self.n_workers} workers[/cyan]")
 
         # Prepare arguments for multiprocessing
         task_args = [
@@ -224,7 +222,7 @@ class ParallelBacktestRunner:
 
                     # Process completed tasks
                     for future in as_completed(future_to_task):
-                        task, args = future_to_task[future]
+                        task, _args = future_to_task[future]
                         start_time = datetime.now()
 
                         try:
@@ -268,7 +266,7 @@ class ParallelBacktestRunner:
                 }
 
                 for future in as_completed(future_to_task):
-                    task, args = future_to_task[future]
+                    task, _args = future_to_task[future]
                     start_time = datetime.now()
 
                     try:
@@ -304,9 +302,7 @@ class ParallelBacktestRunner:
         # Retry failed tasks
         if failed_tasks and self.max_retries > 0:
             if self.verbose and self.console:
-                self.console.print(
-                    f"[yellow]Retrying {len(failed_tasks)} failed backtests[/yellow]"
-                )
+                self.console.print(f"[yellow]Retrying {len(failed_tasks)} failed backtests[/yellow]")
 
             retry_runner = ParallelBacktestRunner(
                 n_workers=self.n_workers,
@@ -362,12 +358,8 @@ class ParallelBacktestRunner:
 
             duration = (datetime.now() - start_time).total_seconds()
 
-            return BacktestResult(
-                trial_id=task.trial_id, metrics=metrics, error=error, duration_seconds=duration
-            )
+            return BacktestResult(trial_id=task.trial_id, metrics=metrics, error=error, duration_seconds=duration)
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
-            return BacktestResult(
-                trial_id=task.trial_id, metrics=None, error=str(e), duration_seconds=duration
-            )
+            return BacktestResult(trial_id=task.trial_id, metrics=None, error=str(e), duration_seconds=duration)

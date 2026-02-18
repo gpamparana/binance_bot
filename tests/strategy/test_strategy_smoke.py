@@ -310,9 +310,7 @@ def test_on_bar_updates_regime_detector(strategy: HedgeGridV1) -> None:
     assert strategy._detector._bar_count == initial_bar_count + 1
 
 
-def test_on_bar_generates_orders_after_warmup(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_on_bar_generates_orders_after_warmup(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test on_bar generates orders once detector is warm.
 
     Validates:
@@ -390,9 +388,7 @@ def test_on_bar_updates_last_mid(strategy: HedgeGridV1) -> None:
 # ============================================================================
 
 
-def test_position_side_suffixes_long(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_position_side_suffixes_long(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test LONG orders receive -LONG position_id suffix.
 
     Validates:
@@ -408,9 +404,7 @@ def test_position_side_suffixes_long(
         strategy.on_bar(bar)
 
     # Check submitted orders for LONG position_id
-    long_orders = [
-        call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.BUY
-    ]
+    long_orders = [call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.BUY]
 
     assert len(long_orders) > 0, "No LONG orders submitted"
 
@@ -422,9 +416,7 @@ def test_position_side_suffixes_long(
         ), f"LONG order position_id should end with -LONG, got {order.position_id}"
 
 
-def test_position_side_suffixes_short(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_position_side_suffixes_short(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test SHORT orders receive -SHORT position_id suffix.
 
     Validates:
@@ -440,9 +432,7 @@ def test_position_side_suffixes_short(
         strategy.on_bar(bar)
 
     # Check submitted orders for SHORT position_id
-    short_orders = [
-        call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.SELL
-    ]
+    short_orders = [call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.SELL]
 
     assert len(short_orders) > 0, "No SHORT orders submitted"
 
@@ -454,9 +444,7 @@ def test_position_side_suffixes_short(
         ), f"SHORT order position_id should end with -SHORT, got {order.position_id}"
 
 
-def test_orders_use_correct_client_order_id_format(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_orders_use_correct_client_order_id_format(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test orders use correct client_order_id format for tracking.
 
     Validates:
@@ -510,9 +498,7 @@ def test_order_accepted_tracked(strategy: HedgeGridV1) -> None:
     strategy.on_order_accepted(event)
 
     # Verify order added to tracking
-    assert (
-        client_order_id in strategy._live_orders
-    ), f"Accepted order not tracked: {client_order_id}"
+    assert client_order_id in strategy._live_orders, f"Accepted order not tracked: {client_order_id}"
 
 
 def test_order_canceled_removed(strategy: HedgeGridV1) -> None:
@@ -536,14 +522,10 @@ def test_order_canceled_removed(strategy: HedgeGridV1) -> None:
     strategy.on_order_canceled(event)
 
     # Verify order removed from tracking
-    assert (
-        client_order_id not in strategy._live_orders
-    ), f"Canceled order still tracked: {client_order_id}"
+    assert client_order_id not in strategy._live_orders, f"Canceled order still tracked: {client_order_id}"
 
 
-def test_on_order_filled_attaches_tp_sl_long(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_on_order_filled_attaches_tp_sl_long(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test on_order_filled attaches TP/SL orders for LONG positions.
 
     Validates:
@@ -572,9 +554,7 @@ def test_on_order_filled_attaches_tp_sl_long(
     strategy.on_order_filled(event)
 
     # Verify TP and SL orders submitted
-    assert (
-        strategy.submit_order.call_count == 2
-    ), f"Expected 2 orders (TP+SL), got {strategy.submit_order.call_count}"
+    assert strategy.submit_order.call_count == 2, f"Expected 2 orders (TP+SL), got {strategy.submit_order.call_count}"
 
     tp_order = strategy.submit_order.call_args_list[0][0][0]
     sl_order = strategy.submit_order.call_args_list[1][0][0]
@@ -594,9 +574,7 @@ def test_on_order_filled_attaches_tp_sl_long(
     assert sl_order.trigger_price < fill_price, "SL trigger should be below entry"
 
 
-def test_on_order_filled_attaches_tp_sl_short(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_on_order_filled_attaches_tp_sl_short(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test on_order_filled attaches TP/SL orders for SHORT positions.
 
     Validates:
@@ -625,9 +603,7 @@ def test_on_order_filled_attaches_tp_sl_short(
     strategy.on_order_filled(event)
 
     # Verify TP and SL orders submitted
-    assert (
-        strategy.submit_order.call_count == 2
-    ), f"Expected 2 orders (TP+SL), got {strategy.submit_order.call_count}"
+    assert strategy.submit_order.call_count == 2, f"Expected 2 orders (TP+SL), got {strategy.submit_order.call_count}"
 
     tp_order = strategy.submit_order.call_args_list[0][0][0]
     sl_order = strategy.submit_order.call_args_list[1][0][0]
@@ -652,9 +628,7 @@ def test_on_order_filled_attaches_tp_sl_short(
 # ============================================================================
 
 
-def test_diff_generates_minimal_operations(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_diff_generates_minimal_operations(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test diff engine generates minimal operations when state unchanged.
 
     Validates:
@@ -680,14 +654,10 @@ def test_diff_generates_minimal_operations(
     # No new orders should be submitted (state unchanged)
     # Note: This assumes diff correctly matches existing orders
     # In practice, some small adjustments might be needed initially
-    assert (
-        strategy.submit_order.call_count == 0
-    ), "Diff generated unnecessary operations for unchanged state"
+    assert strategy.submit_order.call_count == 0, "Diff generated unnecessary operations for unchanged state"
 
 
-def test_diff_adds_orders_when_needed(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_diff_adds_orders_when_needed(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test diff engine adds orders when desired state expands.
 
     Validates:
@@ -737,9 +707,7 @@ def test_diff_cancels_stale_orders(strategy: HedgeGridV1, test_instrument: Crypt
 
     # Verify cancel_order was called for stale order
     cancel_calls = [
-        call
-        for call in strategy.cancel_order.call_args_list
-        if call[0][0].client_order_id == stale_order_id
+        call for call in strategy.cancel_order.call_args_list if call[0][0].client_order_id == stale_order_id
     ]
 
     assert len(cancel_calls) > 0, "Stale order not canceled"
@@ -750,9 +718,7 @@ def test_diff_cancels_stale_orders(strategy: HedgeGridV1, test_instrument: Crypt
 # ============================================================================
 
 
-def test_regime_change_adjusts_ladders_up_to_sideways(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_regime_change_adjusts_ladders_up_to_sideways(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test regime change from UP to SIDEWAYS adjusts ladders.
 
     Validates:
@@ -797,9 +763,7 @@ def test_regime_change_adjusts_ladders_up_to_sideways(
     # Main point: strategy adapts ladder composition
 
 
-def test_regime_change_throttles_counter_ladder(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_regime_change_throttles_counter_ladder(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test regime change throttles counter-trend ladder per policy.
 
     Validates:
@@ -821,16 +785,12 @@ def test_regime_change_throttles_counter_ladder(
         strategy.on_bar(bar)
 
     # Check that SHORT orders are present
-    short_orders = [
-        call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.SELL
-    ]
+    short_orders = [call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.SELL]
 
     assert len(short_orders) > 0, "No SHORT orders in UP regime"
 
     # LONG orders should be throttled (fewer levels, smaller quantities)
-    long_orders = [
-        call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.BUY
-    ]
+    long_orders = [call for call in strategy.submit_order.call_args_list if call[0][0].side == OrderSide.BUY]
 
     # Depending on policy, LONG might be completely disabled or throttled
     # Config has counter_levels=3, so expect up to 3 LONG orders
@@ -845,9 +805,7 @@ def test_regime_change_throttles_counter_ladder(
 # ============================================================================
 
 
-def test_funding_adjustment_reduces_qty(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_funding_adjustment_reduces_qty(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test funding guard reduces quantities near funding time.
 
     Validates:
@@ -945,9 +903,7 @@ def test_empty_diff_no_operations(strategy: HedgeGridV1, test_instrument: Crypto
     assert strategy.cancel_order.call_count == 0, "Empty diff generated cancel operations"
 
 
-def test_precision_guard_filters_invalid_rungs(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_precision_guard_filters_invalid_rungs(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test PrecisionGuard filters out rungs below min notional.
 
     Validates:
@@ -998,9 +954,7 @@ def test_strategy_stops_cleanly(strategy: HedgeGridV1) -> None:
 # ============================================================================
 
 
-def test_full_lifecycle_sideways_regime(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_full_lifecycle_sideways_regime(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test complete lifecycle in SIDEWAYS regime.
 
     Integration test covering:
@@ -1038,9 +992,7 @@ def test_full_lifecycle_sideways_regime(
 
     # 5. Verify both LONG and SHORT orders present (SIDEWAYS regime)
     long_orders = [c for c in strategy.submit_order.call_args_list if c[0][0].side == OrderSide.BUY]
-    short_orders = [
-        c for c in strategy.submit_order.call_args_list if c[0][0].side == OrderSide.SELL
-    ]
+    short_orders = [c for c in strategy.submit_order.call_args_list if c[0][0].side == OrderSide.SELL]
 
     # In SIDEWAYS, expect both sides (unless throttled by policy)
     # At minimum, should have orders from at least one side
@@ -1086,9 +1038,7 @@ def test_full_lifecycle_sideways_regime(
     strategy.on_bar(bar)  # Should not crash
 
 
-def test_full_lifecycle_regime_transition(
-    strategy: HedgeGridV1, test_instrument: CryptoPerpetual
-) -> None:
+def test_full_lifecycle_regime_transition(strategy: HedgeGridV1, test_instrument: CryptoPerpetual) -> None:
     """Test complete lifecycle through regime transition.
 
     Integration test covering:
@@ -1134,9 +1084,7 @@ def test_full_lifecycle_regime_transition(
 
     # 5. Verify orders were adjusted
     # In UP regime, expect more SHORT orders, fewer/no LONG orders
-    short_orders = [
-        c for c in strategy.submit_order.call_args_list if c[0][0].side == OrderSide.SELL
-    ]
+    short_orders = [c for c in strategy.submit_order.call_args_list if c[0][0].side == OrderSide.SELL]
 
     assert len(short_orders) > 0, "No SHORT orders in UP regime"
 

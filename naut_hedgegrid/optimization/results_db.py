@@ -173,23 +173,22 @@ class OptimizationResultsDB:
         int
             ID of saved trial
         """
-        with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
 
-                # Extract key metrics for denormalization
-                metrics = trial.metrics
-                sharpe = metrics.get("sharpe_ratio")
-                profit = metrics.get("profit_factor")
-                calmar = metrics.get("calmar_ratio")
-                max_dd = metrics.get("max_drawdown_pct")
-                trades = metrics.get("total_trades")
-                win_rate = metrics.get("win_rate_pct")
-                total_ret = metrics.get("total_return_pct")
+            # Extract key metrics for denormalization
+            metrics = trial.metrics
+            sharpe = metrics.get("sharpe_ratio")
+            profit = metrics.get("profit_factor")
+            calmar = metrics.get("calmar_ratio")
+            max_dd = metrics.get("max_drawdown_pct")
+            trades = metrics.get("total_trades")
+            win_rate = metrics.get("win_rate_pct")
+            total_ret = metrics.get("total_return_pct")
 
-                # Insert trial
-                cursor.execute(
-                    """
+            # Insert trial
+            cursor.execute(
+                """
                     INSERT INTO trials (
                         study_name, parameters, metrics, score, is_valid,
                         violations, timestamp, duration_seconds, error_message,
@@ -197,31 +196,31 @@ class OptimizationResultsDB:
                         total_trades, win_rate_pct, total_return_pct
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                    (
-                        trial.study_name,
-                        json.dumps(trial.parameters),
-                        json.dumps(trial.metrics),
-                        trial.score,
-                        trial.is_valid,
-                        json.dumps(trial.violations) if trial.violations else None,
-                        trial.timestamp,
-                        trial.duration_seconds,
-                        trial.error_message,
-                        sharpe,
-                        profit,
-                        calmar,
-                        max_dd,
-                        trades,
-                        win_rate,
-                        total_ret,
-                    ),
-                )
+                (
+                    trial.study_name,
+                    json.dumps(trial.parameters),
+                    json.dumps(trial.metrics),
+                    trial.score,
+                    trial.is_valid,
+                    json.dumps(trial.violations) if trial.violations else None,
+                    trial.timestamp,
+                    trial.duration_seconds,
+                    trial.error_message,
+                    sharpe,
+                    profit,
+                    calmar,
+                    max_dd,
+                    trades,
+                    win_rate,
+                    total_ret,
+                ),
+            )
 
-                trial_id = cursor.lastrowid
+            trial_id = cursor.lastrowid
 
-                # Update study metadata
-                cursor.execute(
-                    """
+            # Update study metadata
+            cursor.execute(
+                """
                     INSERT INTO studies (name, total_trials, best_score)
                     VALUES (?, 1, ?)
                     ON CONFLICT(name) DO UPDATE SET
@@ -229,40 +228,38 @@ class OptimizationResultsDB:
                         total_trials = total_trials + 1,
                         best_score = MAX(best_score, excluded.best_score)
                 """,
-                    (trial.study_name, trial.score),
-                )
+                (trial.study_name, trial.score),
+            )
 
-                # Update best params if this is the best trial
-                cursor.execute(
-                    """
+            # Update best params if this is the best trial
+            cursor.execute(
+                """
                     SELECT score FROM best_params WHERE study_name = ?
                 """,
-                    (trial.study_name,),
-                )
+                (trial.study_name,),
+            )
 
-                row = cursor.fetchone()
-                if row is None or trial.score > row[0]:
-                    cursor.execute(
-                        """
+            row = cursor.fetchone()
+            if row is None or trial.score > row[0]:
+                cursor.execute(
+                    """
                         INSERT OR REPLACE INTO best_params
                         (study_name, parameters, metrics, score, trial_id)
                         VALUES (?, ?, ?, ?, ?)
                     """,
-                        (
-                            trial.study_name,
-                            json.dumps(trial.parameters),
-                            json.dumps(trial.metrics),
-                            trial.score,
-                            trial_id,
-                        ),
-                    )
+                    (
+                        trial.study_name,
+                        json.dumps(trial.parameters),
+                        json.dumps(trial.metrics),
+                        trial.score,
+                        trial_id,
+                    ),
+                )
 
-                conn.commit()
-                return trial_id
+            conn.commit()
+            return trial_id
 
-    def get_best_trials(
-        self, study_name: str, n: int = 10, only_valid: bool = True
-    ) -> list[dict[str, Any]]:
+    def get_best_trials(self, study_name: str, n: int = 10, only_valid: bool = True) -> list[dict[str, Any]]:
         """
         Get top N best trials for a study.
 
@@ -456,32 +453,31 @@ class OptimizationResultsDB:
         keep_top_n : int
             Number of top trials to keep
         """
-        with self._lock:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
 
-                # Get IDs of trials to keep
-                cursor.execute(
-                    """
+            # Get IDs of trials to keep
+            cursor.execute(
+                """
                     SELECT id FROM trials
                     WHERE study_name = ?
                     ORDER BY score DESC
                     LIMIT ?
                 """,
-                    (study_name, keep_top_n),
-                )
+                (study_name, keep_top_n),
+            )
 
-                keep_ids = [row[0] for row in cursor.fetchall()]
+            keep_ids = [row[0] for row in cursor.fetchall()]
 
-                if keep_ids:
-                    # Delete trials not in keep list
-                    placeholders = ",".join("?" * len(keep_ids))
-                    cursor.execute(
-                        f"""
+            if keep_ids:
+                # Delete trials not in keep list
+                placeholders = ",".join("?" * len(keep_ids))
+                cursor.execute(
+                    f"""
                         DELETE FROM trials
                         WHERE study_name = ? AND id NOT IN ({placeholders})
                     """,
-                        [study_name] + keep_ids,
-                    )
+                    [study_name] + keep_ids,
+                )
 
-                conn.commit()
+            conn.commit()

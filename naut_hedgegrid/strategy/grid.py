@@ -238,9 +238,7 @@ class GridEngine:
         # Calculate deviation in basis points using Decimal for precision
         mid_decimal = Decimal(str(mid))
         last_center_decimal = Decimal(str(last_center))
-        deviation_bps = abs((mid_decimal - last_center_decimal) / last_center_decimal) * Decimal(
-            "10000"
-        )
+        deviation_bps = abs((mid_decimal - last_center_decimal) / last_center_decimal) * Decimal("10000")
 
         # Check if exceeds threshold
         return float(deviation_bps) > cfg.rebalance.recenter_trigger_bps

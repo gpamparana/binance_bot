@@ -22,12 +22,8 @@ class GridConfig(BaseModel):
         le=1000,
         description="Grid spacing in basis points (e.g., 25.0 = 0.25%)",
     )
-    grid_levels_long: int = Field(
-        ge=1, le=100, description="Number of long grid levels below mid price"
-    )
-    grid_levels_short: int = Field(
-        ge=1, le=100, description="Number of short grid levels above mid price"
-    )
+    grid_levels_long: int = Field(ge=1, le=100, description="Number of long grid levels below mid price")
+    grid_levels_short: int = Field(ge=1, le=100, description="Number of short grid levels above mid price")
     base_qty: float = Field(gt=0, description="Base order quantity in base currency (e.g., BTC)")
     qty_scale: float = Field(
         gt=0,
@@ -77,21 +73,15 @@ class RebalanceConfig(BaseModel):
         le=10000,
         description="Re-center grid if price moves N bps from mid",
     )
-    max_inventory_quote: float = Field(
-        gt=0, description="Maximum inventory in quote currency (e.g., USDT)"
-    )
+    max_inventory_quote: float = Field(gt=0, description="Maximum inventory in quote currency (e.g., USDT)")
 
 
 class ExecutionConfig(BaseModel):
     """Order execution parameters."""
 
     maker_only: bool = Field(default=True, description="Only use maker orders (no taker)")
-    use_post_only_retries: bool = Field(
-        default=True, description="Retry with POST_ONLY flag on rejection"
-    )
-    retry_attempts: int = Field(
-        default=3, ge=0, le=10, description="Number of retry attempts for failed orders"
-    )
+    use_post_only_retries: bool = Field(default=True, description="Retry with POST_ONLY flag on rejection")
+    retry_attempts: int = Field(default=3, ge=0, le=10, description="Number of retry attempts for failed orders")
     retry_delay_ms: int = Field(
         default=100,
         ge=0,
@@ -142,9 +132,7 @@ class RegimeConfig(BaseModel):
     def validate_ema_relationship(self) -> "RegimeConfig":
         """Ensure fast EMA is actually faster than slow EMA."""
         if self.ema_fast >= self.ema_slow:
-            raise ValueError(
-                f"Fast EMA period ({self.ema_fast}) must be less than slow EMA period ({self.ema_slow})"
-            )
+            raise ValueError(f"Fast EMA period ({self.ema_fast}) must be less than slow EMA period ({self.ema_slow})")
         return self
 
 
@@ -187,10 +175,7 @@ class PolicyConfig(BaseModel):
     """Placement policy for inventory biasing by regime."""
 
     strategy: Literal["core-and-scalp", "throttled-counter"] = Field(
-        description=(
-            "Placement strategy: core-and-scalp (thin on both) "
-            "or throttled-counter (full with trend)"
-        )
+        description=("Placement strategy: core-and-scalp (thin on both) or throttled-counter (full with trend)")
     )
     counter_levels: int = Field(
         ge=0,

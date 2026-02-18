@@ -388,7 +388,7 @@ class BaseRunner(ABC):
 
         return strat_config_path, hedge_grid_cfg, venue_config_path, venue_cfg
 
-    def run(  # noqa: PLR0915
+    def run(
         self,
         strategy_config: str,
         venue_config: str,
@@ -442,9 +442,7 @@ class BaseRunner(ABC):
             if require_api_keys:
                 self.console.print("[bold]Validating API credentials...[/bold]")
                 if not api_key or not api_secret:
-                    self.console.print(
-                        "[red]Error: API credentials not found in venue config[/red]"
-                    )
+                    self.console.print("[red]Error: API credentials not found in venue config[/red]")
                     self.console.print(
                         "[yellow]Check that your .env file has the correct environment variables:[/yellow]"
                     )
@@ -507,13 +505,9 @@ class BaseRunner(ABC):
             self.console.print(f"[green]✓[/green] Instrument subscription: {symbol}")
 
             if exec_client_config:
-                self.console.print(
-                    "[green]✓[/green] Execution client configured: BINANCE (USDT_FUTURES)"
-                )
+                self.console.print("[green]✓[/green] Execution client configured: BINANCE (USDT_FUTURES)")
                 hedge_status = "enabled" if venue_cfg.trading.hedge_mode else "disabled"
-                self.console.print(
-                    f"[green]✓[/green] use_reduce_only: False (hedge mode {hedge_status})"
-                )
+                self.console.print(f"[green]✓[/green] use_reduce_only: False (hedge mode {hedge_status})")
             else:
                 self.console.print("[green]✓[/green] Execution mode: PAPER (simulated fills)")
             self.console.print()
@@ -567,21 +561,15 @@ class BaseRunner(ABC):
                         self.console.print(
                             f"[green]✓[/green] Prometheus metrics: http://localhost:{prometheus_port}/metrics"
                         )
-                        self.console.print(
-                            f"[green]✓[/green] FastAPI endpoints: http://localhost:{api_port}/docs"
-                        )
+                        self.console.print(f"[green]✓[/green] FastAPI endpoints: http://localhost:{api_port}/docs")
                         self.console.print()
 
-                    except Exception as e:  # noqa: BLE001
-                        self.console.print(
-                            f"[red]Error: Failed to start ops infrastructure: {e}[/red]"
-                        )
+                    except Exception as e:
+                        self.console.print(f"[red]Error: Failed to start ops infrastructure: {e}[/red]")
                         self.console.print(
                             "[red]Strategy will run WITHOUT monitoring, kill switch, or API controls.[/red]"
                         )
-                        self.console.print(
-                            "[yellow]Consider fixing the ops configuration or restarting.[/yellow]"
-                        )
+                        self.console.print("[yellow]Consider fixing the ops configuration or restarting.[/yellow]")
                         self.ops_manager = None
 
                 # Display running status
@@ -617,7 +605,7 @@ class BaseRunner(ABC):
                     self.node.stop()
                     self.console.print("[green]✓[/green] Node stopped")
 
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     self.console.print(f"[yellow]Warning during shutdown: {e}[/yellow]")
 
                 finally:
@@ -629,7 +617,7 @@ class BaseRunner(ABC):
         except FileNotFoundError as e:
             self.console.print(f"\n[red]Error: {e}[/red]")
             sys.exit(1)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.console.print(f"\n[red]Unexpected error: {e}[/red]")
             self.console.print(f"[red]{traceback.format_exc()}[/red]")
             sys.exit(1)

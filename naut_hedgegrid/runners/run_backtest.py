@@ -183,9 +183,7 @@ class BacktestRunner:
                                 end=end,
                             )
                             data.setdefault("trade_ticks", []).extend(ticks)
-                            self.console.print(
-                                f"[green]✓[/green] Loaded {len(ticks):,} trade ticks"
-                            )
+                            self.console.print(f"[green]✓[/green] Loaded {len(ticks):,} trade ticks")
 
                         elif data_type == "QuoteTick":
                             quotes = catalog.quote_ticks(
@@ -194,9 +192,7 @@ class BacktestRunner:
                                 end=end,
                             )
                             data.setdefault("quote_ticks", []).extend(quotes)
-                            self.console.print(
-                                f"[green]✓[/green] Loaded {len(quotes):,} quote ticks"
-                            )
+                            self.console.print(f"[green]✓[/green] Loaded {len(quotes):,} quote ticks")
 
                         elif data_type == "Bar":
                             bars = catalog.bars(
@@ -214,9 +210,7 @@ class BacktestRunner:
                                 end=end,
                             )
                             data.setdefault("order_book_deltas", []).extend(deltas)
-                            self.console.print(
-                                f"[green]✓[/green] Loaded {len(deltas):,} order book deltas"
-                            )
+                            self.console.print(f"[green]✓[/green] Loaded {len(deltas):,} order book deltas")
 
                         elif data_type in ("FundingRate", "MarkPrice"):
                             # Try loading as generic data
@@ -229,18 +223,12 @@ class BacktestRunner:
                                 )
                                 key = data_type.lower() + "s"
                                 data.setdefault(key, []).extend(generic_data)
-                                self.console.print(
-                                    f"[green]✓[/green] Loaded {len(generic_data):,} {data_type}s"
-                                )
+                                self.console.print(f"[green]✓[/green] Loaded {len(generic_data):,} {data_type}s")
                             except Exception as e:
-                                self.console.print(
-                                    f"[yellow]⚠[/yellow] {data_type} not available: {e}"
-                                )
+                                self.console.print(f"[yellow]⚠[/yellow] {data_type} not available: {e}")
 
                     except Exception as e:
-                        self.console.print(
-                            f"[yellow]Warning: Failed to load {data_type}: {e}[/yellow]"
-                        )
+                        self.console.print(f"[yellow]Warning: Failed to load {data_type}: {e}[/yellow]")
 
             progress.update(task, completed=True)
 
@@ -307,9 +295,7 @@ class BacktestRunner:
                     "PERPETUAL_LINEAR": AccountType.MARGIN,
                     "PERPETUAL_INVERSE": AccountType.MARGIN,
                 }
-                account_type = account_type_map.get(
-                    venue_cfg.venue.account_type, AccountType.MARGIN
-                )
+                account_type = account_type_map.get(venue_cfg.venue.account_type, AccountType.MARGIN)
 
                 # Determine OMS type based on hedge mode
                 oms_type = OmsType.HEDGING if venue_cfg.trading.hedge_mode else OmsType.NETTING
@@ -329,8 +315,7 @@ class BacktestRunner:
                     base_currency=None,  # Will use first balance currency
                 )
                 self.console.print(
-                    f"[green]✓[/green] Added venue: {venue.value} "
-                    f"(oms={oms_type.name}, type={account_type.name})"
+                    f"[green]✓[/green] Added venue: {venue.value} (oms={oms_type.name}, type={account_type.name})"
                 )
 
             except Exception as e:
@@ -511,15 +496,9 @@ class BacktestRunner:
             "run_id": self.run_id,
             "config": self.config.model_dump(mode="python"),
             "account": {
-                "balance_total": float(account.balance_total(currency).as_double())
-                if account and currency
-                else 0.0,
-                "balance_free": float(account.balance_free(currency).as_double())
-                if account and currency
-                else 0.0,
-                "balance_locked": float(account.balance_locked(currency).as_double())
-                if account and currency
-                else 0.0,
+                "balance_total": float(account.balance_total(currency).as_double()) if account and currency else 0.0,
+                "balance_free": float(account.balance_free(currency).as_double()) if account and currency else 0.0,
+                "balance_locked": float(account.balance_locked(currency).as_double()) if account and currency else 0.0,
             },
             "orders": [],
             "positions": [],
@@ -535,9 +514,7 @@ class BacktestRunner:
                 if order.status == OrderStatus.FILLED or order.filled_qty.as_double() > 0:
                     order_dict = {
                         "client_order_id": str(order.client_order_id),
-                        "venue_order_id": str(order.venue_order_id)
-                        if order.venue_order_id
-                        else None,
+                        "venue_order_id": str(order.venue_order_id) if order.venue_order_id else None,
                         "side": str(order.side),
                         "quantity": float(order.quantity.as_double()),
                         "filled_qty": float(order.filled_qty.as_double()),
@@ -556,9 +533,7 @@ class BacktestRunner:
                 unrealized = 0.0
                 if position.is_open:
                     # Get last price from position's last event or use closing price
-                    last_price = (
-                        position.avg_px_close if position.avg_px_close else position.avg_px_open
-                    )
+                    last_price = position.avg_px_close if position.avg_px_close else position.avg_px_open
                     try:
                         from nautilus_trader.model.objects import Price
 
@@ -566,9 +541,7 @@ class BacktestRunner:
                         instrument = engine.cache.instrument(position.instrument_id)
                         price_precision = instrument.price_precision if instrument else 2
                         unrealized = float(
-                            position.unrealized_pnl(
-                                Price(last_price, precision=price_precision)
-                            ).as_double()
+                            position.unrealized_pnl(Price(last_price, precision=price_precision)).as_double()
                         )
                     except Exception:
                         unrealized = 0.0
@@ -610,12 +583,8 @@ class BacktestRunner:
         }
 
         # Calculate total PnL from positions
-        total_realized_pnl = sum(
-            pos.get("realized_pnl", 0.0) for pos in results.get("positions", [])
-        )
-        total_unrealized_pnl = sum(
-            pos.get("unrealized_pnl", 0.0) for pos in results.get("positions", [])
-        )
+        total_realized_pnl = sum(pos.get("realized_pnl", 0.0) for pos in results.get("positions", []))
+        total_unrealized_pnl = sum(pos.get("unrealized_pnl", 0.0) for pos in results.get("positions", []))
 
         metrics["total_realized_pnl"] = total_realized_pnl
         metrics["total_unrealized_pnl"] = total_unrealized_pnl
@@ -623,9 +592,7 @@ class BacktestRunner:
 
         # Calculate fill rate
         filled_orders = sum(1 for o in results.get("orders", []) if o.get("filled_qty", 0) > 0)
-        metrics["fill_rate"] = (
-            filled_orders / metrics["total_orders"] if metrics["total_orders"] > 0 else 0.0
-        )
+        metrics["fill_rate"] = filled_orders / metrics["total_orders"] if metrics["total_orders"] > 0 else 0.0
 
         return metrics
 
@@ -819,16 +786,12 @@ def main(
         strat_configs = []
         for strat_config_entry in bt_config.strategies:
             if not strat_config_entry.enabled:
-                console.print(
-                    f"[yellow]⚠[/yellow] Strategy {strat_config_entry.config_path} disabled, skipping"
-                )
+                console.print(f"[yellow]⚠[/yellow] Strategy {strat_config_entry.config_path} disabled, skipping")
                 continue
 
             strat_config_path = Path(strat_config_entry.config_path)
             if not strat_config_path.exists():
-                console.print(
-                    f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]"
-                )
+                console.print(f"[yellow]Warning: Strategy config not found: {strat_config_path}[/yellow]")
                 continue
 
             # Load HedgeGridConfig
@@ -879,7 +842,7 @@ def main(
         catalog = runner.setup_catalog()
 
         # Run backtest
-        engine, data = runner.run(catalog)
+        engine, _data = runner.run(catalog)
 
         # Extract results
         console.print("[bold]Extracting results...[/bold]")

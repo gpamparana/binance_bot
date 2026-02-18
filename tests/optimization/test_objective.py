@@ -56,9 +56,7 @@ class TestObjectiveWeights:
 
     def test_custom_weights(self):
         """Test custom weight values."""
-        weights = ObjectiveWeights(
-            sharpe_ratio=0.4, profit_factor=0.3, calmar_ratio=0.3, drawdown_penalty=-0.1
-        )
+        weights = ObjectiveWeights(sharpe_ratio=0.4, profit_factor=0.3, calmar_ratio=0.3, drawdown_penalty=-0.1)
 
         assert weights.sharpe_ratio == 0.4
         assert weights.profit_factor == 0.3
@@ -68,9 +66,7 @@ class TestObjectiveWeights:
     def test_invalid_weights_sum(self):
         """Test that invalid weight sums raise error."""
         with pytest.raises(ValueError, match="must sum to ~1.0"):
-            ObjectiveWeights(
-                sharpe_ratio=0.1, profit_factor=0.1, calmar_ratio=0.1, drawdown_penalty=-0.2
-            )
+            ObjectiveWeights(sharpe_ratio=0.1, profit_factor=0.1, calmar_ratio=0.1, drawdown_penalty=-0.2)
 
 
 class TestMultiObjectiveFunction:

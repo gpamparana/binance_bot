@@ -62,13 +62,9 @@ class MockDataSource(DataSource):
         num_funding : int, default 8
             Number of funding rates to generate if funding_df is None
         """
-        self.trades_df = (
-            trades_df if trades_df is not None else self._generate_sample_trades(num_trades)
-        )
+        self.trades_df = trades_df if trades_df is not None else self._generate_sample_trades(num_trades)
         self.mark_df = mark_df if mark_df is not None else self._generate_sample_marks(num_marks)
-        self.funding_df = (
-            funding_df if funding_df is not None else self._generate_sample_funding(num_funding)
-        )
+        self.funding_df = funding_df if funding_df is not None else self._generate_sample_funding(num_funding)
         self.should_fail = should_fail
         self.fetch_count = {"trades": 0, "mark": 0, "funding": 0}
 
@@ -141,15 +137,11 @@ class MockDataSource(DataSource):
         start_utc = start if start.tzinfo else start.replace(tzinfo=UTC)
         end_utc = end if end.tzinfo else end.replace(tzinfo=UTC)
 
-        filtered = self.mark_df[
-            (self.mark_df["timestamp"] >= start_utc) & (self.mark_df["timestamp"] < end_utc)
-        ].copy()
+        filtered = self.mark_df[(self.mark_df["timestamp"] >= start_utc) & (self.mark_df["timestamp"] < end_utc)].copy()
 
         return filtered
 
-    async def fetch_funding_rates(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
         Fetch mock funding rate data.
 

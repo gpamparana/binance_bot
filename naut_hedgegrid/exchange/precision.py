@@ -55,9 +55,7 @@ class PrecisionGuard:
     by rounding prices to ticks, quantities to steps, and validating minimums.
     """
 
-    def __init__(
-        self, instrument: Any | None = None, precision: InstrumentPrecision | None = None
-    ) -> None:
+    def __init__(self, instrument: Any | None = None, precision: InstrumentPrecision | None = None) -> None:
         """Initialize precision guard.
 
         Args:

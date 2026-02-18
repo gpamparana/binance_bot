@@ -84,9 +84,7 @@ class DataSource(ABC):
         """
 
     @abstractmethod
-    async def fetch_funding_rates(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
         Fetch funding rate data in FundingRateSchema format.
 

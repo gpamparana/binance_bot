@@ -411,8 +411,7 @@ class HedgeGridV1(Strategy):
             warmup_bars = max(regime_cfg.ema_slow + 20, 70)
 
             self.log.info(
-                f"Starting warmup: fetching {warmup_bars} historical bars for {symbol} "
-                f"(testnet={self.config.testnet})"
+                f"Starting warmup: fetching {warmup_bars} historical bars for {symbol} (testnet={self.config.testnet})"
             )
 
             # Fetch historical data
@@ -462,10 +461,7 @@ class HedgeGridV1(Strategy):
             if (i + 1) % 10 == 0:
                 regime = self._regime_detector.current()
                 is_warm = self._regime_detector.is_warm
-                self.log.debug(
-                    f"Warmup progress: {i + 1}/{len(historical_bars)} bars, "
-                    f"regime={regime}, warm={is_warm}"
-                )
+                self.log.debug(f"Warmup progress: {i + 1}/{len(historical_bars)} bars, regime={regime}, warm={is_warm}")
 
         # Final status
         final_regime = self._regime_detector.current()
@@ -473,16 +469,8 @@ class HedgeGridV1(Strategy):
 
         if is_warm:
             try:
-                ema_fast_val = (
-                    self._regime_detector.ema_fast.value
-                    if self._regime_detector.ema_fast.value
-                    else 0
-                )
-                ema_slow_val = (
-                    self._regime_detector.ema_slow.value
-                    if self._regime_detector.ema_slow.value
-                    else 0
-                )
+                ema_fast_val = self._regime_detector.ema_fast.value if self._regime_detector.ema_fast.value else 0
+                ema_slow_val = self._regime_detector.ema_slow.value if self._regime_detector.ema_slow.value else 0
                 adx_val = self._regime_detector.adx.value if self._regime_detector.adx.value else 0
                 self.log.info(
                     f"✓ Regime detector warmup complete: current regime={final_regime}, "
@@ -563,10 +551,7 @@ class HedgeGridV1(Strategy):
                     has_sl = True
 
             if has_tp and has_sl:
-                self.log.info(
-                    f"[RECONCILE] {side} position ({float(position.quantity)}) "
-                    f"already has TP/SL, skipping"
-                )
+                self.log.info(f"[RECONCILE] {side} position ({float(position.quantity)}) already has TP/SL, skipping")
                 continue
 
             # Calculate TP/SL from average entry price
@@ -580,25 +565,25 @@ class HedgeGridV1(Strategy):
 
             if side == Side.LONG:
                 tp_price = float(
-                    (
-                        entry_decimal + Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    (entry_decimal + Decimal(self._hedge_grid_config.exit.tp_steps) * price_step).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                 )
                 sl_price = float(
-                    (
-                        entry_decimal - Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    (entry_decimal - Decimal(self._hedge_grid_config.exit.sl_steps) * price_step).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                 )
             else:
                 tp_price = float(
-                    (
-                        entry_decimal - Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    (entry_decimal - Decimal(self._hedge_grid_config.exit.tp_steps) * price_step).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                 )
                 sl_price = float(
-                    (
-                        entry_decimal + Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    (entry_decimal + Decimal(self._hedge_grid_config.exit.sl_steps) * price_step).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                 )
 
             ts_now = self.clock.timestamp_ns()
@@ -724,15 +709,13 @@ class HedgeGridV1(Strategy):
         )
 
         self.log.info(
-            f"Built {len(ladders)} ladder(s): "
-            + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
+            f"Built {len(ladders)} ladder(s): " + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
 
         # Log grid center vs current price for debugging
         deviation_bps = abs(mid - self._grid_center) / self._grid_center * 10000
         self.log.debug(
-            f"Grid center: {self._grid_center:.2f}, Current mid: {mid:.2f}, "
-            f"Deviation: {deviation_bps:.1f} bps"
+            f"Grid center: {self._grid_center:.2f}, Current mid: {mid:.2f}, Deviation: {deviation_bps:.1f} bps"
         )
 
         # Store ladder state for snapshot access (before any filtering)
@@ -834,14 +817,10 @@ class HedgeGridV1(Strategy):
         try:
             # Check if we're in critical error state
             if self._critical_error:
-                self.log.warning(
-                    f"Strategy in critical error state, ignoring fill event: {event.client_order_id}"
-                )
+                self.log.warning(f"Strategy in critical error state, ignoring fill event: {event.client_order_id}")
                 return
 
-            self.log.info(
-                f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}"
-            )
+            self.log.info(f"[FILL EVENT] Order filled: {event.client_order_id} @ {event.last_px}, qty={event.last_qty}")
 
             client_order_id = str(event.client_order_id.value)
 
@@ -920,29 +899,21 @@ class HedgeGridV1(Strategy):
             # Calculate TP/SL based on side using Decimal
             if side == Side.LONG:
                 # LONG: TP above entry, SL below entry
-                tp_price_decimal = fill_price_decimal + (
-                    Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-                )
+                tp_price_decimal = fill_price_decimal + (Decimal(self._hedge_grid_config.exit.tp_steps) * price_step)
                 tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-                sl_price_decimal = fill_price_decimal - (
-                    Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-                )
+                sl_price_decimal = fill_price_decimal - (Decimal(self._hedge_grid_config.exit.sl_steps) * price_step)
                 if sl_price_decimal <= 0:
                     sl_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
                 sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             else:
                 # SHORT: TP below entry, SL above entry
-                tp_price_decimal = fill_price_decimal - (
-                    Decimal(self._hedge_grid_config.exit.tp_steps) * price_step
-                )
+                tp_price_decimal = fill_price_decimal - (Decimal(self._hedge_grid_config.exit.tp_steps) * price_step)
                 if tp_price_decimal <= 0:
                     tp_price_decimal = fill_price_decimal * Decimal("0.01")  # Ensure positive
                 tp_price = float(tp_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
-                sl_price_decimal = fill_price_decimal + (
-                    Decimal(self._hedge_grid_config.exit.sl_steps) * price_step
-                )
+                sl_price_decimal = fill_price_decimal + (Decimal(self._hedge_grid_config.exit.sl_steps) * price_step)
                 sl_price = float(sl_price_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             self.log.info(
@@ -984,9 +955,7 @@ class HedgeGridV1(Strategy):
                         self._fills_with_exits.discard(fill_key)
                     return
                 # Too many retries, position never appeared
-                self.log.error(
-                    f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries"
-                )
+                self.log.error(f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries")
                 # Clean up retry counter
                 del self._position_retry_counts[retry_key]
                 # Keep fill_key in set to prevent further attempts
@@ -1185,7 +1154,8 @@ class HedgeGridV1(Strategy):
             if "-TP-" in client_order_id or "-SL-" in client_order_id:
                 order_type = "TP" if "-TP-" in client_order_id else "SL"
                 self.log.error(
-                    f"[{order_type} REJECTED] {order_type} order rejected: {client_order_id}, reason: {rejection_reason}"
+                    f"[{order_type} REJECTED] {order_type} order rejected: "
+                    f"{client_order_id}, reason: {rejection_reason}"
                 )
 
                 # Extract fill_key from order ID to allow retry (Phase 2.2 fix)
@@ -1213,9 +1183,7 @@ class HedgeGridV1(Strategy):
                         f"Could not extract fill_key from rejected order ID: {client_order_id}, error: {e}"
                     )
             else:
-                self.log.warning(
-                    f"Grid order rejected: {client_order_id}, reason: {rejection_reason}"
-                )
+                self.log.warning(f"Grid order rejected: {client_order_id}, reason: {rejection_reason}")
 
             # Check if retry handler is initialized
             if self._retry_handler is None or not self._retry_handler.enabled:
@@ -1244,18 +1212,14 @@ class HedgeGridV1(Strategy):
 
             # Check if retry is warranted for this rejection type
             if not self._retry_handler.should_retry(rejection_reason):
-                self.log.warning(
-                    f"Order {client_order_id} rejected for non-retryable reason: {rejection_reason}"
-                )
+                self.log.warning(f"Order {client_order_id} rejected for non-retryable reason: {rejection_reason}")
                 del self._pending_retries[client_order_id]
                 self._retry_handler.clear_history(client_order_id)
                 return
 
             # Check retry limit
             if intent.retry_count >= self._hedge_grid_config.execution.retry_attempts:  # type: ignore[union-attr]
-                self.log.warning(
-                    f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning"
-                )
+                self.log.warning(f"Order {client_order_id} exhausted {intent.retry_count} retries, abandoning")
                 del self._pending_retries[client_order_id]
                 self._retry_handler.clear_history(client_order_id)
                 return
@@ -1283,11 +1247,7 @@ class HedgeGridV1(Strategy):
 
             # Generate new unique order ID for retry
             # Extract base order ID without any retry suffixes
-            base_order_id = (
-                client_order_id.split("-retry")[0]
-                if "-retry" in client_order_id
-                else client_order_id
-            )
+            base_order_id = client_order_id.split("-retry")[0] if "-retry" in client_order_id else client_order_id
             base_order_id = base_order_id.split("-R")[0] if "-R" in base_order_id else base_order_id
 
             # Create compact retry ID that stays under 36 char limit
@@ -1304,9 +1264,7 @@ class HedgeGridV1(Strategy):
                     base_order_id = "-".join(parts)
                     new_client_order_id = f"{base_order_id}-R{new_attempt}"
 
-            self.log.debug(
-                f"Generated retry order ID: {new_client_order_id} (length: {len(new_client_order_id)})"
-            )
+            self.log.debug(f"Generated retry order ID: {new_client_order_id} (length: {len(new_client_order_id)})")
 
             new_intent = replace(
                 intent,
@@ -1381,14 +1339,10 @@ class HedgeGridV1(Strategy):
         # Enhanced logging for TP/SL denials
         if "-TP-" in client_order_id:
             # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
-            self.log.debug(
-                f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}"
-            )
+            self.log.debug(f"[TP DENIED] Take-profit order denied: {client_order_id}, reason: {reason}")
         elif "-SL-" in client_order_id:
             # Downgrade to debug during optimization - these are expected in backtests due to position cache lag
-            self.log.debug(
-                f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}"
-            )
+            self.log.debug(f"[SL DENIED] Stop-loss order denied: {client_order_id}, reason: {reason}")
         else:
             self.log.error(f"Grid order denied: {client_order_id}, reason: {reason}")
 
@@ -1456,9 +1410,7 @@ class HedgeGridV1(Strategy):
                 with self._grid_orders_lock:
                     removed = self._grid_orders_cache.pop(client_order_id, None)
                     if removed:
-                        self.log.info(
-                            f"Evicted ghost order after cancel rejection: {client_order_id}"
-                        )
+                        self.log.info(f"Evicted ghost order after cancel rejection: {client_order_id}")
 
     def _execute_diff(self, diff_result) -> None:
         """
@@ -1649,15 +1601,11 @@ class HedgeGridV1(Strategy):
         side_abbr = "L" if side == Side.LONG else "S"
 
         # Format: HG1-TP-L01-1234567890123-1 (max ~30 chars)
-        client_order_id_str = (
-            f"{self._strategy_name}-TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
-        )
+        client_order_id_str = f"{self._strategy_name}-TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
         # Validate length (Binance limit is 36 chars)
         if len(client_order_id_str) > 36:
-            self.log.error(
-                f"TP order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}"
-            )
+            self.log.error(f"TP order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
             # Fallback: use even shorter format
             client_order_id_str = f"TP-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
@@ -1721,15 +1669,11 @@ class HedgeGridV1(Strategy):
         side_abbr = "L" if side == Side.LONG else "S"
 
         # Format: HG1-SL-L01-1234567890123-1 (max ~30 chars)
-        client_order_id_str = (
-            f"{self._strategy_name}-SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
-        )
+        client_order_id_str = f"{self._strategy_name}-SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
         # Validate length (Binance limit is 36 chars)
         if len(client_order_id_str) > 36:
-            self.log.error(
-                f"SL order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}"
-            )
+            self.log.error(f"SL order ID too long ({len(client_order_id_str)} chars): {client_order_id_str}")
             # Fallback: use even shorter format
             client_order_id_str = f"SL-{side_abbr}{level:02d}-{timestamp_ms}-{counter}"
 
@@ -2228,9 +2172,7 @@ class HedgeGridV1(Strategy):
             self.log.error(f"Failed to cancel orders during critical error handling: {e}")
 
         # Log state for debugging
-        self.log.critical(
-            "Critical error handler complete. " "Trading paused. Manual intervention required."
-        )
+        self.log.critical("Critical error handler complete. Trading paused. Manual intervention required.")
 
     def _validate_order_size(self, order) -> bool:
         """
@@ -2259,9 +2201,7 @@ class HedgeGridV1(Strategy):
 
             # Apply maximum position percentage (default 95%)
             max_position_pct = (
-                getattr(self._hedge_grid_config, "max_position_pct", 0.95)
-                if self._hedge_grid_config
-                else 0.95
+                getattr(self._hedge_grid_config, "max_position_pct", 0.95) if self._hedge_grid_config else 0.95
             )
 
             if notional > free_balance * max_position_pct:
@@ -2286,10 +2226,7 @@ class HedgeGridV1(Strategy):
         """
         if self._circuit_breaker_active:
             # Check if cooldown period has passed
-            if (
-                self._circuit_breaker_reset_time
-                and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time
-            ):
+            if self._circuit_breaker_reset_time and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time:
                 self._circuit_breaker_active = False
                 self._circuit_breaker_reset_time = None
                 self.log.info("Circuit breaker reset - resuming normal operation")
@@ -2305,16 +2242,10 @@ class HedgeGridV1(Strategy):
             self._error_window.popleft()
 
         # Check threshold (default 10 errors per minute)
-        max_errors = (
-            getattr(self._hedge_grid_config, "max_errors_per_minute", 10)
-            if self._hedge_grid_config
-            else 10
-        )
+        max_errors = getattr(self._hedge_grid_config, "max_errors_per_minute", 10) if self._hedge_grid_config else 10
 
         if len(self._error_window) >= max_errors:
-            self.log.critical(
-                f"Circuit breaker activated - {len(self._error_window)} errors in last minute"
-            )
+            self.log.critical(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
             self._circuit_breaker_active = True
 
             # Cancel all orders
@@ -2364,9 +2295,7 @@ class HedgeGridV1(Strategy):
 
                 # Check against limit (default 20%)
                 max_drawdown_pct = (
-                    getattr(self._hedge_grid_config, "max_drawdown_pct", 20.0)
-                    if self._hedge_grid_config
-                    else 20.0
+                    getattr(self._hedge_grid_config, "max_drawdown_pct", 20.0) if self._hedge_grid_config else 20.0
                 )
 
                 if drawdown_pct > max_drawdown_pct and not self._drawdown_protection_triggered:

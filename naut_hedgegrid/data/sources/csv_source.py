@@ -179,9 +179,7 @@ class CSVDataSource(DataSource):
         logger.info(f"Loaded {len(df):,} mark prices")
         return df
 
-    async def fetch_funding_rates(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
         Fetch funding rate data from CSV file.
 

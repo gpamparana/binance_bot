@@ -209,9 +209,7 @@ class StrategyOptimizer:
         if self.verbose and self.console:
             self.console.print(f"[dim]Initial Memory:[/dim] {self.initial_memory_gb:.2f} GB")
             self.console.print(f"[dim]Memory Limit:[/dim] {self.memory_limit_gb:.2f} GB")
-            self.console.print(
-                f"[dim]Timeout:[/dim] {self.backtest_timeout_seconds} seconds per trial"
-            )
+            self.console.print(f"[dim]Timeout:[/dim] {self.backtest_timeout_seconds} seconds per trial")
 
     def _validate_base_configs(self):
         """Validate that base configuration files are valid."""
@@ -242,13 +240,9 @@ class StrategyOptimizer:
             Completed Optuna study with results
         """
         if self.verbose and self.console:
-            self.console.print(
-                "\n[bold cyan]═══════════════════════════════════════════[/bold cyan]"
-            )
+            self.console.print("\n[bold cyan]═══════════════════════════════════════════[/bold cyan]")
             self.console.print("[bold cyan]     Parameter Optimization Started[/bold cyan]")
-            self.console.print(
-                "[bold cyan]═══════════════════════════════════════════[/bold cyan]\n"
-            )
+            self.console.print("[bold cyan]═══════════════════════════════════════════[/bold cyan]\n")
             self.console.print(f"[dim]Study Name:[/dim] {self.study_name}")
             self.console.print(f"[dim]Total Trials:[/dim] {self.n_trials}")
             self.console.print(f"[dim]Parallel Jobs:[/dim] {self.n_jobs}")
@@ -291,9 +285,7 @@ class StrategyOptimizer:
 
                 if metrics is None:
                     if self.verbose and self.console:
-                        self.console.print(
-                            f"[red]✗ Trial {current_trial_num}: Backtest failed[/red]"
-                        )
+                        self.console.print(f"[red]✗ Trial {current_trial_num}: Backtest failed[/red]")
                     return float("-inf")
 
                 # Validate constraints
@@ -331,9 +323,7 @@ class StrategyOptimizer:
 
                 # Log trial result (only significant ones or invalid)
                 if self.verbose and self.console:
-                    self._log_trial_result_compact(
-                        current_trial_num, metrics, score, is_valid, violations
-                    )
+                    self._log_trial_result_compact(current_trial_num, metrics, score, is_valid, violations)
 
                 return score
 
@@ -353,9 +343,7 @@ class StrategyOptimizer:
                 self.results_db.save_trial(trial_data)
 
                 if self.verbose and self.console:
-                    self.console.print(
-                        f"[red]✗ Trial {current_trial_num} ERROR: {str(e)[:80]}[/red]"
-                    )
+                    self.console.print(f"[red]✗ Trial {current_trial_num} ERROR: {str(e)[:80]}[/red]")
 
                 return float("-inf")
 
@@ -372,17 +360,16 @@ class StrategyOptimizer:
                     console=self.console,
                     transient=False,
                 ) as progress:
-                    task = progress.add_task(
-                        f"[cyan]Optimizing ({self.n_trials} trials)", total=self.n_trials
-                    )
+                    task = progress.add_task(f"[cyan]Optimizing ({self.n_trials} trials)", total=self.n_trials)
 
                     def callback(study, trial):
                         """Update progress bar after each trial."""
-                        progress.update(
-                            task,
-                            advance=1,
-                            description=f"[cyan]Trial {self.total_trials_run}/{self.n_trials} | Best: {self.best_score:.4f} | Valid: {self.valid_trials}/{self.total_trials_run}",
+                        desc = (
+                            f"[cyan]Trial {self.total_trials_run}/{self.n_trials}"
+                            f" | Best: {self.best_score:.4f}"
+                            f" | Valid: {self.valid_trials}/{self.total_trials_run}"
                         )
+                        progress.update(task, advance=1, description=desc)
 
                     study.optimize(
                         objective,
@@ -392,9 +379,7 @@ class StrategyOptimizer:
                         callbacks=[callback],
                     )
             else:
-                study.optimize(
-                    objective, n_trials=self.n_trials, n_jobs=self.n_jobs, show_progress_bar=False
-                )
+                study.optimize(objective, n_trials=self.n_trials, n_jobs=self.n_jobs, show_progress_bar=False)
 
         except KeyboardInterrupt:
             if self.verbose and self.console:
@@ -447,9 +432,7 @@ class StrategyOptimizer:
             # Backtest exceeded timeout
             future.cancel()
             if self.verbose and self.console:
-                self.console.print(
-                    f"[yellow]⚠ Trial {trial_id}: Timeout after {timeout_seconds}s[/yellow]"
-                )
+                self.console.print(f"[yellow]⚠ Trial {trial_id}: Timeout after {timeout_seconds}s[/yellow]")
             return None
         except Exception as e:
             # Other errors during backtest
@@ -457,9 +440,7 @@ class StrategyOptimizer:
                 self.console.print(f"[red]✗ Trial {trial_id}: Error - {str(e)[:100]}[/red]")
             return None
 
-    def _run_backtest_with_parameters(
-        self, trial_id: int, parameters: dict[str, Any]
-    ) -> PerformanceMetrics | None:
+    def _run_backtest_with_parameters(self, trial_id: int, parameters: dict[str, Any]) -> PerformanceMetrics | None:
         """
         Run backtest with given parameters, including timeout and memory protection.
 
@@ -496,7 +477,7 @@ class StrategyOptimizer:
         try:
             # Log progress
             if self.verbose and self.console and trial_id % 10 == 0:
-                elapsed = time.time() - start_time
+                time.time() - start_time
                 self.console.print(
                     f"[dim]Starting Trial {trial_id} | "
                     f"Memory: {start_memory_gb:.2f} GB | "
@@ -504,9 +485,7 @@ class StrategyOptimizer:
                 )
 
             # Run backtest with timeout protection
-            result = self._run_backtest_with_timeout(
-                trial_id, parameters, self.backtest_timeout_seconds
-            )
+            result = self._run_backtest_with_timeout(trial_id, parameters, self.backtest_timeout_seconds)
 
             # Check memory after backtest
             end_memory_gb = get_memory_usage_gb()
@@ -520,8 +499,7 @@ class StrategyOptimizer:
             if memory_used_gb > 0.5:  # More than 500 MB used
                 if self.verbose and self.console:
                     self.console.print(
-                        f"[yellow]⚠ Trial {trial_id}: High memory usage "
-                        f"(+{memory_used_gb:.2f} GB)[/yellow]"
+                        f"[yellow]⚠ Trial {trial_id}: High memory usage (+{memory_used_gb:.2f} GB)[/yellow]"
                     )
 
             # Aggressive garbage collection after each trial
@@ -543,9 +521,7 @@ class StrategyOptimizer:
             if self.enable_gc:
                 gc.collect()
 
-    def _run_backtest_core(
-        self, trial_id: int, parameters: dict[str, Any]
-    ) -> PerformanceMetrics | None:
+    def _run_backtest_core(self, trial_id: int, parameters: dict[str, Any]) -> PerformanceMetrics | None:
         """
         Core backtest execution logic without timeout handling.
 
@@ -614,14 +590,12 @@ class StrategyOptimizer:
             )
 
             # Run backtest
-            runner = BacktestRunner(
-                backtest_config=self.backtest_config, strategy_configs=[strategy_config]
-            )
+            runner = BacktestRunner(backtest_config=self.backtest_config, strategy_configs=[strategy_config])
 
             try:
                 # Setup catalog and run backtest
                 catalog = runner.setup_catalog()
-                engine, data = runner.run(catalog)
+                engine, _data = runner.run(catalog)
 
                 # Clean up temporary config
                 temp_config_path.unlink(missing_ok=True)
@@ -646,10 +620,7 @@ class StrategyOptimizer:
 
                     # Extract starting capital from config
                     starting_capital = 10000.0  # Default
-                    if (
-                        self.backtest_config.venues
-                        and self.backtest_config.venues[0].starting_balances
-                    ):
+                    if self.backtest_config.venues and self.backtest_config.venues[0].starting_balances:
                         starting_balance = self.backtest_config.venues[0].starting_balances[0]
                         starting_capital = float(starting_balance.total)
 
@@ -658,7 +629,6 @@ class StrategyOptimizer:
                     # ==================================================================
                     total_pnl = 0.0
                     total_realized_pnl = 0.0
-                    total_unrealized_pnl = 0.0
 
                     if account:
                         # Get final balance
@@ -677,7 +647,7 @@ class StrategyOptimizer:
 
                         unrealized_pnls_dict = portfolio.unrealized_pnls(venue)
                         if unrealized_pnls_dict and currency in unrealized_pnls_dict:
-                            total_unrealized_pnl = float(unrealized_pnls_dict[currency].as_double())
+                            float(unrealized_pnls_dict[currency].as_double())
 
                     # If we didn't get PnL from account, try BacktestResult
                     if total_pnl == 0.0:
@@ -695,15 +665,13 @@ class StrategyOptimizer:
                             pass
 
                     # Calculate return percentage
-                    total_return_pct = (
-                        (total_pnl / starting_capital * 100) if starting_capital > 0 else 0.0
-                    )
+                    total_return_pct = (total_pnl / starting_capital * 100) if starting_capital > 0 else 0.0
 
                     # ==================================================================
                     # 2. Extract trade statistics from positions
                     # ==================================================================
                     positions_closed = engine.cache.positions_closed()
-                    positions_open = engine.cache.positions_open()
+                    engine.cache.positions_open()
 
                     total_trades = len(positions_closed)  # Count closed positions as trades
                     winning_trades = 0
@@ -735,9 +703,7 @@ class StrategyOptimizer:
                     # Calculate win rate and profit factor
                     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
                     profit_factor = (
-                        (total_win / total_loss)
-                        if total_loss > 0
-                        else (total_win if total_win > 0 else 0.0)
+                        (total_win / total_loss) if total_loss > 0 else (total_win if total_win > 0 else 0.0)
                     )
 
                     avg_win = total_win / winning_trades if winning_trades > 0 else 0.0
@@ -793,20 +759,14 @@ class StrategyOptimizer:
                                 risk_free_rate = 0.05
 
                                 sharpe_ratio = (annualized_mean - risk_free_rate) / annualized_std
-                                sharpe_ratio = max(
-                                    -3.0, min(3.0, sharpe_ratio)
-                                )  # Cap for stability
+                                sharpe_ratio = max(-3.0, min(3.0, sharpe_ratio))  # Cap for stability
 
                                 # Sortino ratio (downside deviation)
                                 negative_returns = returns_array[returns_array < 0]
                                 if len(negative_returns) > 0:
-                                    downside_std = np.std(negative_returns) * np.sqrt(
-                                        periods_per_year
-                                    )
+                                    downside_std = np.std(negative_returns) * np.sqrt(periods_per_year)
                                     if downside_std > 0:
-                                        sortino_ratio = (
-                                            annualized_mean - risk_free_rate
-                                        ) / downside_std
+                                        sortino_ratio = (annualized_mean - risk_free_rate) / downside_std
                                         sortino_ratio = max(-3.0, min(3.0, sortino_ratio))
 
                     # Calculate max drawdown from equity curve simulation
@@ -884,9 +844,7 @@ class StrategyOptimizer:
                         # Ladder metrics - Set to 0 (strategy-specific)
                         avg_ladder_depth_long=0.0,
                         avg_ladder_depth_short=0.0,
-                        ladder_fill_rate_pct=(len(filled_orders) / total_orders * 100)
-                        if total_orders > 0
-                        else 0.0,
+                        ladder_fill_rate_pct=(len(filled_orders) / total_orders * 100) if total_orders > 0 else 0.0,
                         # MAE/MFE - Set to 0 (would need tick-by-tick position tracking)
                         avg_mae_pct=0.0,
                         avg_mfe_pct=0.0,
@@ -1019,9 +977,7 @@ class StrategyOptimizer:
         self.console.print(f"  Increase: {memory_increase_gb:+.2f} GB\n")
 
         # Show best parameters in a nice table
-        table = Table(
-            title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta"
-        )
+        table = Table(title="🏆 Optimized Parameters", show_header=True, header_style="bold magenta")
         table.add_column("Parameter", style="cyan", no_wrap=True)
         table.add_column("Value", style="green", justify="right")
 

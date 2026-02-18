@@ -159,9 +159,7 @@ class TestFetchData:
 class TestNormalizeData:
     """Tests for normalize_data function."""
 
-    def test_normalize_all_data_types(
-        self, sample_trades_df, sample_mark_prices_df, sample_funding_rates_df
-    ):
+    def test_normalize_all_data_types(self, sample_trades_df, sample_mark_prices_df, sample_funding_rates_df):
         """Test normalizing all data types."""
         raw_data = {
             "trades": sample_trades_df,
@@ -179,9 +177,7 @@ class TestNormalizeData:
     def test_normalize_empty_dataframes(self):
         """Test normalizing empty DataFrames."""
         raw_data = {
-            "trades": pd.DataFrame(
-                columns=["timestamp", "price", "size", "aggressor_side", "trade_id"]
-            ),
+            "trades": pd.DataFrame(columns=["timestamp", "price", "size", "aggressor_side", "trade_id"]),
             "mark": pd.DataFrame(columns=["timestamp", "mark_price"]),
         }
 

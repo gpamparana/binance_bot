@@ -44,18 +44,14 @@ class ParameterSpace:
     # Inventory validation: total_qty_both_sides * BTC_price <= account * max_position_pct
     # Bitcoin typically moves 0.1-0.3% per minute, so we need tighter grids
     # With levels=10, qty_scale=1.2, base_qty=0.005: ~0.08 BTC total = ~$7200 at $90k
-    GRID_STEP_BPS = ParameterBounds(
-        min_value=10, max_value=50, step=5
-    )  # 0.1% to 0.5% spacing for 1-min bars
+    GRID_STEP_BPS = ParameterBounds(min_value=10, max_value=50, step=5)  # 0.1% to 0.5% spacing for 1-min bars
     GRID_LEVELS_LONG = ParameterBounds(
         min_value=3, max_value=5, step=1
     )  # 3-5 levels below mid (reduced for optimization speed)
     GRID_LEVELS_SHORT = ParameterBounds(
         min_value=3, max_value=5, step=1
     )  # 3-5 levels above mid (reduced for optimization speed)
-    BASE_QTY = ParameterBounds(
-        min_value=0.001, max_value=0.01, log_scale=True
-    )  # $90-$900 per level (wider range)
+    BASE_QTY = ParameterBounds(min_value=0.001, max_value=0.01, log_scale=True)  # $90-$900 per level (wider range)
     QTY_SCALE = ParameterBounds(min_value=1.0, max_value=1.2, step=0.05)  # Max 1.2 (20% growth)
 
     # Exit parameters
@@ -65,25 +61,17 @@ class ParameterSpace:
     # Regime detection parameters (optimized for 1-minute bars)
     # Shorter periods for faster response to 1-minute price action
     ADX_LEN = ParameterBounds(min_value=7, max_value=21, step=1)  # Shorter for 1-min bars
-    EMA_FAST = ParameterBounds(
-        min_value=5, max_value=15, step=1
-    )  # Min 5 to match config validation
+    EMA_FAST = ParameterBounds(min_value=5, max_value=15, step=1)  # Min 5 to match config validation
     EMA_SLOW = ParameterBounds(min_value=15, max_value=50, step=2)  # Shorter slow period
     ATR_LEN = ParameterBounds(min_value=7, max_value=21, step=1)  # Shorter for 1-min bars
-    HYSTERESIS_BPS = ParameterBounds(
-        min_value=5, max_value=30, step=5
-    )  # Tighter for frequent updates
+    HYSTERESIS_BPS = ParameterBounds(min_value=5, max_value=30, step=5)  # Tighter for frequent updates
 
     # Policy parameters
     COUNTER_LEVELS = ParameterBounds(min_value=2, max_value=10, step=1)
-    COUNTER_QTY_SCALE = ParameterBounds(
-        min_value=0.3, max_value=1.0, step=0.05
-    )  # Allow full size on counter-trend
+    COUNTER_QTY_SCALE = ParameterBounds(min_value=0.3, max_value=1.0, step=0.05)  # Allow full size on counter-trend
 
     # Rebalance parameters (tighter for 1-minute bars)
-    RECENTER_TRIGGER_BPS = ParameterBounds(
-        min_value=25, max_value=200, step=25
-    )  # Tighter trigger for 1-min bars
+    RECENTER_TRIGGER_BPS = ParameterBounds(min_value=25, max_value=200, step=25)  # Tighter trigger for 1-min bars
 
     # Funding parameters
     FUNDING_MAX_COST_BPS = ParameterBounds(min_value=5, max_value=50, step=5)
@@ -126,15 +114,9 @@ class ParameterSpace:
             Dictionary of suggested parameters organized by config section
         """
         # Grid parameters
-        grid_step_bps = self._suggest_float(
-            trial, "grid_step_bps", self._get_bounds("GRID_STEP_BPS")
-        )
-        grid_levels_long = self._suggest_int(
-            trial, "grid_levels_long", self._get_bounds("GRID_LEVELS_LONG")
-        )
-        grid_levels_short = self._suggest_int(
-            trial, "grid_levels_short", self._get_bounds("GRID_LEVELS_SHORT")
-        )
+        grid_step_bps = self._suggest_float(trial, "grid_step_bps", self._get_bounds("GRID_STEP_BPS"))
+        grid_levels_long = self._suggest_int(trial, "grid_levels_long", self._get_bounds("GRID_LEVELS_LONG"))
+        grid_levels_short = self._suggest_int(trial, "grid_levels_short", self._get_bounds("GRID_LEVELS_SHORT"))
         base_qty = self._suggest_float(trial, "base_qty", self._get_bounds("BASE_QTY"))
         qty_scale = self._suggest_float(trial, "qty_scale", self._get_bounds("QTY_SCALE"))
 
@@ -156,17 +138,11 @@ class ParameterSpace:
             ema_fast = min(ema_fast, ema_slow - 3)
 
         atr_len = self._suggest_int(trial, "atr_len", self._get_bounds("ATR_LEN"))
-        hysteresis_bps = self._suggest_float(
-            trial, "hysteresis_bps", self._get_bounds("HYSTERESIS_BPS")
-        )
+        hysteresis_bps = self._suggest_float(trial, "hysteresis_bps", self._get_bounds("HYSTERESIS_BPS"))
 
         # Policy parameters
-        counter_levels = self._suggest_int(
-            trial, "counter_levels", self._get_bounds("COUNTER_LEVELS")
-        )
-        counter_qty_scale = self._suggest_float(
-            trial, "counter_qty_scale", self._get_bounds("COUNTER_QTY_SCALE")
-        )
+        counter_levels = self._suggest_int(trial, "counter_levels", self._get_bounds("COUNTER_LEVELS"))
+        counter_qty_scale = self._suggest_float(trial, "counter_qty_scale", self._get_bounds("COUNTER_QTY_SCALE"))
 
         # Rebalance parameters
         recenter_trigger_bps = self._suggest_float(
@@ -179,9 +155,7 @@ class ParameterSpace:
         )
 
         # Position parameters
-        max_position_pct = self._suggest_float(
-            trial, "max_position_pct", self._get_bounds("MAX_POSITION_PCT")
-        )
+        max_position_pct = self._suggest_float(trial, "max_position_pct", self._get_bounds("MAX_POSITION_PCT"))
 
         # Return parameters organized by config section
         return {
@@ -226,7 +200,7 @@ class ParameterSpace:
         """Suggest a float parameter from trial."""
         if bounds.step is not None:
             # Discrete float with step
-            n_steps = int((bounds.max_value - bounds.min_value) / bounds.step) + 1
+            int((bounds.max_value - bounds.min_value) / bounds.step) + 1
             return trial.suggest_float(name, bounds.min_value, bounds.max_value, step=bounds.step)
         # Continuous float
         return trial.suggest_float(name, bounds.min_value, bounds.max_value, log=bounds.log_scale)
@@ -270,10 +244,7 @@ class ParameterSpace:
                 return False
 
             # Check position limits (stored as decimal fraction: 0.5-0.95)
-            if (
-                params["position"]["max_position_pct"] > 1.0
-                or params["position"]["max_position_pct"] < 0.1
-            ):
+            if params["position"]["max_position_pct"] > 1.0 or params["position"]["max_position_pct"] < 0.1:
                 return False
 
             # Check inventory caps - calculate exact max grid cost
@@ -299,7 +270,6 @@ class ParameterSpace:
 
             # Estimate BTC price range for validation
             # Use conservative range to ensure we don't exceed limits
-            min_btc_price = 70000.0  # Lower bound
             max_btc_price = 100000.0  # Upper bound
 
             # Calculate maximum possible USDT exposure

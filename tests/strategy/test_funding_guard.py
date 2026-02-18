@@ -1,5 +1,5 @@
 """Tests for funding guard system."""
-# ruff: noqa: SLF001  # Allow private member access in tests
+# Allow private member access in tests
 
 from datetime import UTC, datetime, timedelta
 
@@ -405,15 +405,9 @@ def test_multiple_ladders_handled_correctly() -> None:
     guard.on_funding_update(rate=0.01, next_ts=next_funding)
 
     # Create multiple LONG ladders
-    long1 = Ladder.from_list(
-        Side.LONG, [Rung(price=99.0, qty=0.1, side=Side.LONG, tp=100.0, sl=98.0)]
-    )
-    long2 = Ladder.from_list(
-        Side.LONG, [Rung(price=98.0, qty=0.2, side=Side.LONG, tp=99.0, sl=97.0)]
-    )
-    short1 = Ladder.from_list(
-        Side.SHORT, [Rung(price=101.0, qty=0.1, side=Side.SHORT, tp=100.0, sl=102.0)]
-    )
+    long1 = Ladder.from_list(Side.LONG, [Rung(price=99.0, qty=0.1, side=Side.LONG, tp=100.0, sl=98.0)])
+    long2 = Ladder.from_list(Side.LONG, [Rung(price=98.0, qty=0.2, side=Side.LONG, tp=99.0, sl=97.0)])
+    short1 = Ladder.from_list(Side.SHORT, [Rung(price=101.0, qty=0.1, side=Side.SHORT, tp=100.0, sl=102.0)])
 
     ladders = [long1, long2, short1]
 

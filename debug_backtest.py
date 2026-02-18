@@ -8,12 +8,13 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+import yaml
 from nautilus_trader.model.enums import OmsType
+
 from naut_hedgegrid.config.backtest import BacktestConfigLoader
 from naut_hedgegrid.config.strategy import HedgeGridConfigLoader
 from naut_hedgegrid.runners.run_backtest import BacktestRunner
 from naut_hedgegrid.strategies.hedge_grid_v1 import HedgeGridV1Config
-import yaml
 
 
 def main():
@@ -53,7 +54,7 @@ def main():
         },
         "position": {
             "max_position_pct": 0.65,  # Already as decimal
-        }
+        },
     }
 
     print("=" * 80)
@@ -96,7 +97,7 @@ def main():
     strategy_config = HedgeGridV1Config(
         instrument_id=hedge_grid_cfg.strategy.instrument_id,
         hedge_grid_config_path=str(temp_config),
-        oms_type=OmsType.HEDGING
+        oms_type=OmsType.HEDGING,
     )
 
     # Run backtest
@@ -108,10 +109,7 @@ def main():
     print("  - Any errors or warnings")
     print("\n" + "=" * 80 + "\n")
 
-    runner = BacktestRunner(
-        backtest_config=backtest_config,
-        strategy_configs=[strategy_config]
-    )
+    runner = BacktestRunner(backtest_config=backtest_config, strategy_configs=[strategy_config])
 
     catalog = runner.setup_catalog()
     engine, data = runner.run(catalog)
@@ -136,7 +134,7 @@ def main():
         print(f"Total orders: {len(orders)}")
 
         if len(orders) > 0:
-            print(f"\nFirst 5 orders:")
+            print("\nFirst 5 orders:")
             for i, order in enumerate(list(orders)[:5]):
                 print(f"  {i+1}. {order}")
         else:

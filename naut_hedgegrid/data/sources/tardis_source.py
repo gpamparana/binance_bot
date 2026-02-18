@@ -61,8 +61,7 @@ class TardisDataSource(DataSource):
         self.api_key = api_key or os.getenv("TARDIS_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "Tardis API key required. Set TARDIS_API_KEY environment variable "
-                "or pass api_key parameter."
+                "Tardis API key required. Set TARDIS_API_KEY environment variable or pass api_key parameter."
             )
 
         self.exchange = exchange
@@ -74,9 +73,7 @@ class TardisDataSource(DataSource):
 
             self.client = TardisClient(api_key=self.api_key, cache_dir=cache_dir)
         except ImportError as e:
-            raise ImportError(
-                "tardis-client not installed. Install with: pip install tardis-client"
-            ) from e
+            raise ImportError("tardis-client not installed. Install with: pip install tardis-client") from e
 
         logger.info(f"Initialized TardisDataSource for {exchange}")
 
@@ -174,9 +171,7 @@ class TardisDataSource(DataSource):
 
         if not trades:
             logger.warning(f"No trades found for {symbol} in time range")
-            return pd.DataFrame(
-                columns=["timestamp", "price", "size", "aggressor_side", "trade_id"]
-            )
+            return pd.DataFrame(columns=["timestamp", "price", "size", "aggressor_side", "trade_id"])
 
         df = pd.DataFrame(trades)
         logger.info(f"Fetched {len(df):,} trades for {symbol}")
@@ -258,9 +253,7 @@ class TardisDataSource(DataSource):
         logger.info(f"Fetched {len(df):,} mark prices for {symbol}")
         return df
 
-    async def fetch_funding_rates(
-        self, symbol: str, start: datetime, end: datetime
-    ) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
         Fetch funding rate data from Tardis.dev.
 
@@ -322,9 +315,7 @@ class TardisDataSource(DataSource):
 
             funding_rate = float(data.get("r", 0.0))
             next_funding_ms = data.get("T", 0)
-            next_funding_time = (
-                pd.Timestamp(next_funding_ms, unit="ms", tz="UTC") if next_funding_ms else None
-            )
+            next_funding_time = pd.Timestamp(next_funding_ms, unit="ms", tz="UTC") if next_funding_ms else None
 
             funding_rates.append(
                 {
@@ -361,7 +352,7 @@ class TardisDataSource(DataSource):
             # Test with a minimal query
             from tardis_client import Channel  # type: ignore
 
-            test_messages = list(
+            list(
                 self.client.replay(
                     exchange=self.exchange,
                     from_date="2024-01-01",

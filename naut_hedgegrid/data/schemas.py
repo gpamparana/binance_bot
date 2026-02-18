@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.model.data import Bar, BarType, TradeTick
-from nautilus_trader.model.enums import AggressorSide, BarAggregation, PriceType
+from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 from pydantic import BaseModel, Field, field_validator
@@ -181,9 +181,7 @@ def to_trade_tick(row: TradeSchema | dict[str, Any], instrument_id: InstrumentId
     )
 
 
-def to_mark_price_update(
-    row: MarkPriceSchema | dict[str, Any], instrument_id: InstrumentId
-) -> dict[str, Any]:
+def to_mark_price_update(row: MarkPriceSchema | dict[str, Any], instrument_id: InstrumentId) -> dict[str, Any]:
     """
     Convert MarkPriceSchema to dictionary for custom data storage.
 
@@ -219,9 +217,7 @@ def to_mark_price_update(
     }
 
 
-def to_funding_rate_update(
-    row: FundingRateSchema | dict[str, Any], instrument_id: InstrumentId
-) -> dict[str, Any]:
+def to_funding_rate_update(row: FundingRateSchema | dict[str, Any], instrument_id: InstrumentId) -> dict[str, Any]:
     """
     Convert FundingRateSchema to dictionary for custom data storage.
 
@@ -303,9 +299,7 @@ def validate_dataframe_schema(df: pd.DataFrame, schema_type: str) -> None:
             raise ValueError(f"Row {idx} validation failed for {schema_type}: {e}") from e
 
 
-def convert_dataframe_to_nautilus(
-    df: pd.DataFrame, schema_type: str, instrument_id: InstrumentId
-) -> list[Any]:
+def convert_dataframe_to_nautilus(df: pd.DataFrame, schema_type: str, instrument_id: InstrumentId) -> list[Any]:
     """
     Convert entire DataFrame to Nautilus objects.
 
@@ -343,9 +337,7 @@ def convert_dataframe_to_nautilus(
     return results
 
 
-def mark_prices_to_bars(
-    df: pd.DataFrame, bar_type: BarType
-) -> list[Bar]:
+def mark_prices_to_bars(df: pd.DataFrame, bar_type: BarType) -> list[Bar]:
     """
     Convert mark price OHLCV data to Nautilus Bar objects.
 

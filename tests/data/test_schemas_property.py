@@ -141,9 +141,7 @@ def test_trade_schema_arbitrary_trade_ids(trade_id):
 
 
 @given(
-    mark_price=st.floats(
-        min_value=0.01, max_value=1_000_000, allow_nan=False, allow_infinity=False
-    ),
+    mark_price=st.floats(min_value=0.01, max_value=1_000_000, allow_nan=False, allow_infinity=False),
     timestamp=valid_timestamps,
 )
 def test_mark_price_schema_valid_ranges(mark_price, timestamp):

@@ -56,9 +56,7 @@ class BinanceDataSource(DataSource):
         max_retries: int = 5,
     ):
         """Initialize Binance data source."""
-        self.base_url = (
-            "https://testnet.binancefuture.com" if testnet else base_url
-        )
+        self.base_url = "https://testnet.binancefuture.com" if testnet else base_url
         self.rate_limit_delay = rate_limit_delay
         self.request_limit = request_limit
         self.max_retries = max_retries
@@ -105,10 +103,9 @@ class BinanceDataSource(DataSource):
                     # Handle rate limiting with exponential backoff
                     if response.status == 429:
                         retry_after = int(response.headers.get("Retry-After", 60))
-                        backoff_time = min(retry_after, 2 ** attempt * 10)
+                        backoff_time = min(retry_after, 2**attempt * 10)
                         logger.warning(
-                            f"Rate limit hit (429), waiting {backoff_time}s "
-                            f"(attempt {attempt + 1}/{self.max_retries})"
+                            f"Rate limit hit (429), waiting {backoff_time}s (attempt {attempt + 1}/{self.max_retries})"
                         )
                         await asyncio.sleep(backoff_time)
                         continue
@@ -120,11 +117,9 @@ class BinanceDataSource(DataSource):
                                 f"Request failed with {response.status}: {text}, "
                                 f"retrying (attempt {attempt + 1}/{self.max_retries})"
                             )
-                            await asyncio.sleep(2 ** attempt)
+                            await asyncio.sleep(2**attempt)
                             continue
-                        raise ConnectionError(
-                            f"Binance API error {response.status}: {text}"
-                        )
+                        raise ConnectionError(f"Binance API error {response.status}: {text}")
 
                     data = await response.json()
 
@@ -136,7 +131,7 @@ class BinanceDataSource(DataSource):
             except aiohttp.ClientError as e:
                 if attempt < self.max_retries - 1:
                     logger.warning(f"Network error: {e}, retrying...")
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                     continue
                 raise ConnectionError(f"Network error after {self.max_retries} retries: {e}")
 
@@ -224,21 +219,15 @@ class BinanceDataSource(DataSource):
                 break
 
         if not all_trades:
-            return pd.DataFrame(
-                columns=["timestamp", "price", "size", "aggressor_side", "trade_id"]
-            )
+            return pd.DataFrame(columns=["timestamp", "price", "size", "aggressor_side", "trade_id"])
 
         # Convert to DataFrame
         df = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(
-                    [t["T"] for t in all_trades], unit="ms", utc=True
-                ),
+                "timestamp": pd.to_datetime([t["T"] for t in all_trades], unit="ms", utc=True),
                 "price": [float(t["p"]) for t in all_trades],
                 "size": [float(t["q"]) for t in all_trades],
-                "aggressor_side": [
-                    "SELL" if t["m"] else "BUY" for t in all_trades
-                ],  # m=true means buyer is maker
+                "aggressor_side": ["SELL" if t["m"] else "BUY" for t in all_trades],  # m=true means buyer is maker
                 "trade_id": [str(t["a"]) for t in all_trades],
             }
         )
@@ -329,9 +318,7 @@ class BinanceDataSource(DataSource):
         # Kline format: [Open time, Open, High, Low, Close, Volume, Close time, ...]
         df = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(
-                    [k[0] for k in all_klines], unit="ms", utc=True
-                ),  # Open time
+                "timestamp": pd.to_datetime([k[0] for k in all_klines], unit="ms", utc=True),  # Open time
                 "open": [float(k[1]) for k in all_klines],
                 "high": [float(k[2]) for k in all_klines],
                 "low": [float(k[3]) for k in all_klines],
@@ -425,9 +412,7 @@ class BinanceDataSource(DataSource):
         # Convert to DataFrame
         df = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(
-                    [f["fundingTime"] for f in all_funding], unit="ms", utc=True
-                ),
+                "timestamp": pd.to_datetime([f["fundingTime"] for f in all_funding], unit="ms", utc=True),
                 "funding_rate": [float(f["fundingRate"]) for f in all_funding],
             }
         )

@@ -8,7 +8,6 @@ from naut_hedgegrid.domain.types import OrderIntent, Side
 from naut_hedgegrid.exchange.precision import InstrumentPrecision, PrecisionGuard
 from naut_hedgegrid.strategy.order_sync import PostOnlyRetryHandler
 
-
 # =====================================================================
 # FIXTURES
 # =====================================================================

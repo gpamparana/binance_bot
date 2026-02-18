@@ -15,7 +15,6 @@ Requirements:
     - Valid strategy and venue configuration files
 """
 
-import asyncio
 import os
 import sys
 from pathlib import Path
@@ -91,6 +90,7 @@ def main():
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
         import traceback
+
         console.print(traceback.format_exc())
         sys.exit(1)
 

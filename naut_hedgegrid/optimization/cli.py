@@ -14,54 +14,21 @@ console = Console()
 @app.command()
 def optimize(
     backtest_config: Path = typer.Option(
-        ...,
-        "--backtest-config",
-        "-b",
-        help="Path to backtest configuration YAML",
-        exists=True,
-        dir_okay=False
+        ..., "--backtest-config", "-b", help="Path to backtest configuration YAML", exists=True, dir_okay=False
     ),
     strategy_config: Path = typer.Option(
-        ...,
-        "--strategy-config",
-        "-s",
-        help="Path to base strategy configuration YAML",
-        exists=True,
-        dir_okay=False
+        ..., "--strategy-config", "-s", help="Path to base strategy configuration YAML", exists=True, dir_okay=False
     ),
-    n_trials: int = typer.Option(
-        100,
-        "--trials",
-        "-n",
-        help="Number of optimization trials to run",
-        min=1,
-        max=10000
-    ),
+    n_trials: int = typer.Option(100, "--trials", "-n", help="Number of optimization trials to run", min=1, max=10000),
     study_name: str | None = typer.Option(
-        None,
-        "--study-name",
-        help="Name for optimization study (default: auto-generated)"
+        None, "--study-name", help="Name for optimization study (default: auto-generated)"
     ),
     db_path: Path | None = typer.Option(
-        None,
-        "--db-path",
-        help="Path to results database (default: optimization_results.db)"
+        None, "--db-path", help="Path to results database (default: optimization_results.db)"
     ),
-    export_csv: Path | None = typer.Option(
-        None,
-        "--export-csv",
-        help="Export results to CSV file"
-    ),
-    storage: str | None = typer.Option(
-        None,
-        "--storage",
-        help="Optuna storage URL (e.g., sqlite:///optuna.db)"
-    ),
-    no_verbose: bool = typer.Option(
-        False,
-        "--no-verbose",
-        help="Disable verbose output"
-    ),
+    export_csv: Path | None = typer.Option(None, "--export-csv", help="Export results to CSV file"),
+    storage: str | None = typer.Option(None, "--storage", help="Optuna storage URL (e.g., sqlite:///optuna.db)"),
+    no_verbose: bool = typer.Option(False, "--no-verbose", help="Disable verbose output"),
 ):
     """
     Run parameter optimization for HedgeGridV1 strategy.
@@ -89,7 +56,7 @@ def optimize(
         study_name=study_name,
         db_path=db_path,
         storage=storage,
-        verbose=not no_verbose
+        verbose=not no_verbose,
     )
 
     # Run optimization
@@ -115,24 +82,9 @@ def optimize(
 @app.command()
 def analyze(
     study_name: str = typer.Argument(..., help="Name of optimization study"),
-    db_path: Path = typer.Option(
-        Path("optimization_results.db"),
-        "--db-path",
-        help="Path to results database"
-    ),
-    top_n: int = typer.Option(
-        10,
-        "--top-n",
-        "-n",
-        help="Number of top trials to show",
-        min=1,
-        max=100
-    ),
-    export_csv: Path | None = typer.Option(
-        None,
-        "--export-csv",
-        help="Export results to CSV file"
-    ),
+    db_path: Path = typer.Option(Path("optimization_results.db"), "--db-path", help="Path to results database"),
+    top_n: int = typer.Option(10, "--top-n", "-n", help="Number of top trials to show", min=1, max=100),
+    export_csv: Path | None = typer.Option(None, "--export-csv", help="Export results to CSV file"),
 ):
     """
     Analyze optimization results.
@@ -199,7 +151,7 @@ def analyze(
             f"{metrics.get('sharpe_ratio', 0):.2f}",
             f"{metrics.get('profit_factor', 0):.2f}",
             f"{metrics.get('max_drawdown_pct', 0):.1f}",
-            str(metrics.get("total_trades", 0))
+            str(metrics.get("total_trades", 0)),
         )
 
     console.print(trials_table)
@@ -213,18 +165,8 @@ def analyze(
 @app.command()
 def cleanup(
     study_name: str = typer.Argument(..., help="Name of optimization study"),
-    db_path: Path = typer.Option(
-        Path("optimization_results.db"),
-        "--db-path",
-        help="Path to results database"
-    ),
-    keep_top_n: int = typer.Option(
-        100,
-        "--keep-top-n",
-        help="Number of top trials to keep",
-        min=1,
-        max=1000
-    ),
+    db_path: Path = typer.Option(Path("optimization_results.db"), "--db-path", help="Path to results database"),
+    keep_top_n: int = typer.Option(100, "--keep-top-n", help="Number of top trials to keep", min=1, max=1000),
 ):
     """
     Cleanup old trials from database.

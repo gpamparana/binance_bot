@@ -219,7 +219,7 @@ uv run python -m naut_hedgegrid.optimization.cli optimize \
       --trials 200 \
       --study-name btcusdt_overnight_$(date +%Y%m%d) \
       2>&1 | tee logs/optimization_overnight_$(date +%Y%m%d_%H%M%S).log
-      
+
 ### Expected Output
 
 The optimizer now provides **clean, readable output** with minimal noise:

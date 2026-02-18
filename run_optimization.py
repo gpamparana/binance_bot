@@ -9,9 +9,6 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from naut_hedgegrid.optimization import (
-    ConstraintsValidator,
-    MultiObjectiveFunction,
-    ParameterSpace,
     StrategyOptimizer,
 )
 from naut_hedgegrid.optimization.constraints import ConstraintThresholds
@@ -27,12 +24,12 @@ def main():
 
     # Relax constraints for testing since we have limited data
     constraints = ConstraintThresholds(
-        min_sharpe_ratio=0.5,    # Relaxed for testing
-        max_drawdown_pct=30.0,   # Relaxed for testing
-        min_trades=5,            # Very relaxed - just need some trades
-        min_win_rate_pct=30.0,   # Relaxed for testing
-        min_profit_factor=0.8,   # Relaxed for testing
-        min_calmar_ratio=0.1     # Relaxed for testing
+        min_sharpe_ratio=0.5,  # Relaxed for testing
+        max_drawdown_pct=30.0,  # Relaxed for testing
+        min_trades=5,  # Very relaxed - just need some trades
+        min_win_rate_pct=30.0,  # Relaxed for testing
+        min_profit_factor=0.8,  # Relaxed for testing
+        min_calmar_ratio=0.1,  # Relaxed for testing
     )
 
     # Initialize optimizer
@@ -40,18 +37,18 @@ def main():
         backtest_config_path=backtest_config,
         base_strategy_config_path=strategy_config,
         n_trials=2,  # Start with 2 trials for testing
-        n_jobs=1,    # Sequential execution
+        n_jobs=1,  # Sequential execution
         study_name="hedge_grid_optimization",
         objective_weights=ObjectiveWeights(),  # Use defaults
         constraint_thresholds=constraints,
-        verbose=True
+        verbose=True,
     )
 
     # Run optimization
     print("Starting optimization with 2 trials...")
     study = optimizer.optimize()
 
-    print(f"\nOptimization complete!")
+    print("\nOptimization complete!")
     print(f"Best score: {study.best_value:.4f}")
     print(f"Best trial: {study.best_trial.number}")
 

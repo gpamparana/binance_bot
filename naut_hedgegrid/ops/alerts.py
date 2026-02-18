@@ -182,9 +182,7 @@ class AlertManager:
             # Log any errors
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    channel = (
-                        "Slack" if i == 0 and self.config.has_slack_configured() else "Telegram"
-                    )
+                    channel = "Slack" if i == 0 and self.config.has_slack_configured() else "Telegram"
                     self.logger.error(f"Failed to send alert to {channel}: {result}")
 
     def _format_message(
@@ -262,19 +260,19 @@ class AlertManager:
 
         # Send webhook request
         timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.post(
                 self.config.slack_webhook,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise RuntimeError(
-                        f"Slack webhook returned status {response.status}: {error_text}"
-                    )
+            ) as response,
+        ):
+            if response.status != 200:
+                error_text = await response.text()
+                raise RuntimeError(f"Slack webhook returned status {response.status}: {error_text}")
 
-                self.logger.debug(f"Alert sent to Slack: {severity.name}")
+            self.logger.debug(f"Alert sent to Slack: {severity.name}")
 
     async def _send_telegram(self, message: str, severity: AlertSeverity) -> None:
         """
@@ -308,9 +306,7 @@ class AlertManager:
             async with session.post(url, json=payload) as response:
                 if response.status != 200:
                     error_data = await response.json()
-                    raise RuntimeError(
-                        f"Telegram API returned status {response.status}: {error_data}"
-                    )
+                    raise RuntimeError(f"Telegram API returned status {response.status}: {error_data}")
 
                 self.logger.debug(f"Alert sent to Telegram: {severity.name}")
 

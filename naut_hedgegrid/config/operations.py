@@ -96,8 +96,7 @@ class KillSwitchConfig(BaseModel):
         """Ensure margin ratio has adequate safety buffer."""
         if v > 0.90:
             raise ValueError(
-                f"Margin ratio {v:.1%} is dangerously high. "
-                "Maximum recommended is 90% to avoid forced liquidation"
+                f"Margin ratio {v:.1%} is dangerously high. Maximum recommended is 90% to avoid forced liquidation"
             )
         return v
 

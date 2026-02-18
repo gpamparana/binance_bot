@@ -24,8 +24,7 @@ class TestJSONLParsing:
         """Test parsing valid JSONL file."""
         jsonl_file = tmp_path / "messages.jsonl"
         jsonl_file.write_text(
-            '{"data": {"e": "aggTrade", "s": "BTCUSDT"}}\n'
-            '{"data": {"e": "aggTrade", "s": "ETHUSDT"}}\n'
+            '{"data": {"e": "aggTrade", "s": "BTCUSDT"}}\n' '{"data": {"e": "aggTrade", "s": "ETHUSDT"}}\n'
         )
 
         config = {"trades": {"file_path": "messages.jsonl"}}
@@ -141,8 +140,7 @@ class TestBinanceMessageFormats:
         """Test parsing Binance markPriceUpdate messages."""
         jsonl_file = tmp_path / "mark.jsonl"
         jsonl_file.write_text(
-            '{"data": {"e": "markPriceUpdate", "s": "BTCUSDT", "p": "50001", '
-            '"E": 1704067200000}}\n'
+            '{"data": {"e": "markPriceUpdate", "s": "BTCUSDT", "p": "50001", ' '"E": 1704067200000}}\n'
         )
 
         config = {"mark": {"file_path": "mark.jsonl"}}
@@ -191,8 +189,7 @@ class TestBinanceMessageFormats:
         """Test handling of unwrapped message format (no 'data' wrapper)."""
         jsonl_file = tmp_path / "trades.jsonl"
         jsonl_file.write_text(
-            '{"e": "aggTrade", "s": "BTCUSDT", "p": "50000", "q": "0.1", '
-            '"T": 1704067200000, "a": 123, "m": false}\n'
+            '{"e": "aggTrade", "s": "BTCUSDT", "p": "50000", "q": "0.1", ' '"T": 1704067200000, "a": 123, "m": false}\n'
         )
 
         config = {"trades": {"file_path": "trades.jsonl"}}
@@ -289,10 +286,7 @@ class TestDataExtraction:
         df = await source.fetch_trades("BTCUSDT", start_date, end_date)
 
         assert len(df) == 0
-        assert all(
-            col in df.columns
-            for col in ["timestamp", "price", "size", "aggressor_side", "trade_id"]
-        )
+        assert all(col in df.columns for col in ["timestamp", "price", "size", "aggressor_side", "trade_id"])
 
 
 # ============================================================================

@@ -121,9 +121,7 @@ class BinanceDataWarmer:
         bars: list[Bar] = []
         remaining = num_bars
 
-        self.console.print(
-            f"[cyan]Fetching {num_bars} historical {interval} bars for {symbol}...[/cyan]"
-        )
+        self.console.print(f"[cyan]Fetching {num_bars} historical {interval} bars for {symbol}...[/cyan]")
 
         while remaining > 0:
             # Calculate request parameters
@@ -173,18 +171,13 @@ class BinanceDataWarmer:
             bars = new_bars + bars
             remaining -= len(new_bars)
 
-            self.console.print(
-                f"[green]Fetched {len(new_bars)} bars, "
-                f"total: {len(bars)}/{num_bars}[/green]"
-            )
+            self.console.print(f"[green]Fetched {len(new_bars)} bars, total: {len(bars)}/{num_bars}[/green]")
 
             # Rate limiting
             if remaining > 0:
                 time.sleep(self.REQUEST_DELAY)
 
-        self.console.print(
-            f"[green]✓ Successfully fetched {len(bars)} historical bars[/green]"
-        )
+        self.console.print(f"[green]✓ Successfully fetched {len(bars)} historical bars[/green]")
 
         return bars
 
@@ -223,9 +216,7 @@ class BinanceDataWarmer:
         bars: list[DetectorBar] = []
         remaining = num_bars
 
-        self.console.print(
-            f"[cyan]Fetching {num_bars} detector bars ({interval}) for {symbol}...[/cyan]"
-        )
+        self.console.print(f"[cyan]Fetching {num_bars} detector bars ({interval}) for {symbol}...[/cyan]")
 
         while remaining > 0:
             limit = min(remaining, self.MAX_KLINES_PER_REQUEST)
@@ -239,7 +230,7 @@ class BinanceDataWarmer:
             if bars:
                 # Pagination: get older data
                 # Use timestamp of oldest bar we have
-                oldest_bar = bars[0]
+                bars[0]
                 # Approximate timestamp (since DetectorBar doesn't have timestamps)
                 # We'll just request the next batch
                 params["limit"] = limit
@@ -280,9 +271,7 @@ class BinanceDataWarmer:
             if remaining > 0:
                 time.sleep(self.REQUEST_DELAY)
 
-        self.console.print(
-            f"[green]✓ Fetched {len(bars)} detector bars[/green]"
-        )
+        self.console.print(f"[green]✓ Fetched {len(bars)} detector bars[/green]")
 
         return bars
 
@@ -367,12 +356,11 @@ class BinanceDataWarmer:
         """
         if interval.endswith("m"):
             return int(interval[:-1])
-        elif interval.endswith("h"):
+        if interval.endswith("h"):
             return int(interval[:-1]) * 60
-        elif interval.endswith("d"):
+        if interval.endswith("d"):
             return int(interval[:-1]) * 1440
-        else:
-            return 1  # Default to 1 minute
+        return 1  # Default to 1 minute
 
     def close(self) -> None:
         """Close the HTTP client."""

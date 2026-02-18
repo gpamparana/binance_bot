@@ -35,9 +35,7 @@ class TradingConfig(BaseModel):
         description="Enable hedge mode (long/short positions simultaneously)",
     )
     leverage: int = Field(default=1, ge=1, le=125, description="Default leverage")
-    margin_type: Literal["CROSSED", "ISOLATED"] = Field(
-        default="CROSSED", description="Margin type"
-    )
+    margin_type: Literal["CROSSED", "ISOLATED"] = Field(default="CROSSED", description="Margin type")
 
 
 class RiskConfig(BaseModel):
@@ -45,9 +43,7 @@ class RiskConfig(BaseModel):
 
     max_leverage: int = Field(default=20, ge=1, le=125, description="Maximum allowed leverage")
     min_order_size_usdt: float = Field(default=5.0, gt=0, description="Minimum order size in USDT")
-    max_order_size_usdt: float = Field(
-        default=100000.0, gt=0, description="Maximum order size in USDT"
-    )
+    max_order_size_usdt: float = Field(default=100000.0, gt=0, description="Maximum order size in USDT")
 
 
 class PrecisionConfig(BaseModel):
@@ -71,9 +67,7 @@ class WebSocketConfig(BaseModel):
 
     ping_interval: int = Field(default=30, ge=5, description="WebSocket ping interval in seconds")
     reconnect_timeout: int = Field(default=60, ge=10, description="Reconnect timeout in seconds")
-    max_reconnect_attempts: int = Field(
-        default=10, ge=1, description="Maximum reconnection attempts"
-    )
+    max_reconnect_attempts: int = Field(default=10, ge=1, description="Maximum reconnection attempts")
 
 
 class VenueConfig(BaseModel):

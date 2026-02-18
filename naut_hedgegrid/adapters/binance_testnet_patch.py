@@ -5,12 +5,6 @@ Binance testnet includes test instruments with Chinese characters (测试测试U
 which cause Nautilus to crash when parsing symbols. This patch filters out non-ASCII
 symbols before they reach Nautilus's Rust code.
 """
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from nautilus_trader.adapters.binance.futures.http.account import (
-        BinanceFuturesAccountHttpAPI,
-    )
 
 
 def patch_binance_futures_for_testnet():
@@ -42,8 +36,6 @@ def patch_binance_futures_for_testnet():
         return filtered_risks
 
     # Replace method
-    BinanceFuturesAccountHttpAPI.query_futures_position_risk = (
-        patched_query_futures_position_risk
-    )
+    BinanceFuturesAccountHttpAPI.query_futures_position_risk = patched_query_futures_position_risk
 
     return True

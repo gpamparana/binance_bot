@@ -138,24 +138,14 @@ class ConstraintsValidator:
 
         try:
             # Check Sharpe ratio
-            if (
-                metrics.sharpe_ratio is None
-                or metrics.sharpe_ratio < self.thresholds.min_sharpe_ratio
-            ):
+            if metrics.sharpe_ratio is None or metrics.sharpe_ratio < self.thresholds.min_sharpe_ratio:
                 sharpe = metrics.sharpe_ratio if metrics.sharpe_ratio is not None else 0
-                violations.append(
-                    f"Sharpe ratio {sharpe:.2f} < {self.thresholds.min_sharpe_ratio:.2f}"
-                )
+                violations.append(f"Sharpe ratio {sharpe:.2f} < {self.thresholds.min_sharpe_ratio:.2f}")
 
             # Check maximum drawdown
-            if (
-                metrics.max_drawdown_pct is None
-                or metrics.max_drawdown_pct > self.thresholds.max_drawdown_pct
-            ):
+            if metrics.max_drawdown_pct is None or metrics.max_drawdown_pct > self.thresholds.max_drawdown_pct:
                 dd = metrics.max_drawdown_pct if metrics.max_drawdown_pct is not None else 100
-                violations.append(
-                    f"Max drawdown {dd:.1f}% > {self.thresholds.max_drawdown_pct:.1f}%"
-                )
+                violations.append(f"Max drawdown {dd:.1f}% > {self.thresholds.max_drawdown_pct:.1f}%")
 
             # Check trade count
             if metrics.total_trades is None or metrics.total_trades < self.thresholds.min_trades:
@@ -163,34 +153,19 @@ class ConstraintsValidator:
                 violations.append(f"Trade count {trades} < {self.thresholds.min_trades}")
 
             # Check win rate
-            if (
-                metrics.win_rate_pct is None
-                or metrics.win_rate_pct < self.thresholds.min_win_rate_pct
-            ):
+            if metrics.win_rate_pct is None or metrics.win_rate_pct < self.thresholds.min_win_rate_pct:
                 win_rate = metrics.win_rate_pct if metrics.win_rate_pct is not None else 0
-                violations.append(
-                    f"Win rate {win_rate:.1f}% < {self.thresholds.min_win_rate_pct:.1f}%"
-                )
+                violations.append(f"Win rate {win_rate:.1f}% < {self.thresholds.min_win_rate_pct:.1f}%")
 
             # Check profit factor
-            if (
-                metrics.profit_factor is None
-                or metrics.profit_factor < self.thresholds.min_profit_factor
-            ):
+            if metrics.profit_factor is None or metrics.profit_factor < self.thresholds.min_profit_factor:
                 pf = metrics.profit_factor if metrics.profit_factor is not None else 0
-                violations.append(
-                    f"Profit factor {pf:.2f} < {self.thresholds.min_profit_factor:.2f}"
-                )
+                violations.append(f"Profit factor {pf:.2f} < {self.thresholds.min_profit_factor:.2f}")
 
             # Check Calmar ratio
-            if (
-                metrics.calmar_ratio is None
-                or metrics.calmar_ratio < self.thresholds.min_calmar_ratio
-            ):
+            if metrics.calmar_ratio is None or metrics.calmar_ratio < self.thresholds.min_calmar_ratio:
                 calmar = metrics.calmar_ratio if metrics.calmar_ratio is not None else 0
-                violations.append(
-                    f"Calmar ratio {calmar:.2f} < {self.thresholds.min_calmar_ratio:.2f}"
-                )
+                violations.append(f"Calmar ratio {calmar:.2f} < {self.thresholds.min_calmar_ratio:.2f}")
 
         except (AttributeError, TypeError) as e:
             violations.append(f"Invalid metrics: {e!s}")
@@ -218,18 +193,12 @@ class ConstraintsValidator:
 
         try:
             # Sharpe ratio violation
-            if (
-                metrics.sharpe_ratio is None
-                or metrics.sharpe_ratio < self.thresholds.min_sharpe_ratio
-            ):
+            if metrics.sharpe_ratio is None or metrics.sharpe_ratio < self.thresholds.min_sharpe_ratio:
                 sharpe = metrics.sharpe_ratio if metrics.sharpe_ratio is not None else 0
                 score += max(0, self.thresholds.min_sharpe_ratio - sharpe)
 
             # Drawdown violation (scaled by 0.1 to match other metrics)
-            if (
-                metrics.max_drawdown_pct is None
-                or metrics.max_drawdown_pct > self.thresholds.max_drawdown_pct
-            ):
+            if metrics.max_drawdown_pct is None or metrics.max_drawdown_pct > self.thresholds.max_drawdown_pct:
                 dd = metrics.max_drawdown_pct if metrics.max_drawdown_pct is not None else 100
                 score += max(0, dd - self.thresholds.max_drawdown_pct) * 0.1
 
@@ -239,26 +208,17 @@ class ConstraintsValidator:
                 score += max(0, self.thresholds.min_trades - trades) * 0.01
 
             # Win rate violation (scaled)
-            if (
-                metrics.win_rate_pct is None
-                or metrics.win_rate_pct < self.thresholds.min_win_rate_pct
-            ):
+            if metrics.win_rate_pct is None or metrics.win_rate_pct < self.thresholds.min_win_rate_pct:
                 win_rate = metrics.win_rate_pct if metrics.win_rate_pct is not None else 0
                 score += max(0, self.thresholds.min_win_rate_pct - win_rate) * 0.01
 
             # Profit factor violation
-            if (
-                metrics.profit_factor is None
-                or metrics.profit_factor < self.thresholds.min_profit_factor
-            ):
+            if metrics.profit_factor is None or metrics.profit_factor < self.thresholds.min_profit_factor:
                 pf = metrics.profit_factor if metrics.profit_factor is not None else 0
                 score += max(0, self.thresholds.min_profit_factor - pf)
 
             # Calmar ratio violation
-            if (
-                metrics.calmar_ratio is None
-                or metrics.calmar_ratio < self.thresholds.min_calmar_ratio
-            ):
+            if metrics.calmar_ratio is None or metrics.calmar_ratio < self.thresholds.min_calmar_ratio:
                 calmar = metrics.calmar_ratio if metrics.calmar_ratio is not None else 0
                 score += max(0, self.thresholds.min_calmar_ratio - calmar)
 

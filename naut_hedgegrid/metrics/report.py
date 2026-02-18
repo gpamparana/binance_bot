@@ -5,8 +5,7 @@ including returns, risk-adjusted metrics, trade statistics, execution quality,
 and exposure metrics.
 """
 
-from dataclasses import asdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
@@ -201,10 +200,7 @@ class ReportGenerator:
         total_return_pct = (total_pnl / initial_equity) * 100 if initial_equity > 0 else 0.0
 
         # Annualize based on time period
-        time_delta = (
-            self.account_history.iloc[-1]["timestamp"]
-            - self.account_history.iloc[0]["timestamp"]
-        )
+        time_delta = self.account_history.iloc[-1]["timestamp"] - self.account_history.iloc[0]["timestamp"]
         days = max(time_delta.days, 1)  # Avoid division by zero
         years = days / 365.0
         annualized_return_pct = (total_return_pct / years) if years > 0 else 0.0
@@ -344,18 +340,17 @@ class ReportGenerator:
             if dd < -0.01:  # In drawdown (allow small numerical errors)
                 if current_dd_start is None:
                     current_dd_start = timestamps[i]
-            else:
-                # Recovered from drawdown
-                if current_dd_start is not None:
-                    time_diff = timestamps[i] - current_dd_start
-                    # Handle both pandas Timedelta and numpy timedelta64
-                    if hasattr(time_diff, "total_seconds"):
-                        duration = time_diff.total_seconds() / 86400
-                    else:
-                        # numpy timedelta64
-                        duration = float(time_diff / np.timedelta64(1, "D"))
-                    max_dd_duration = max(max_dd_duration, duration)
-                    current_dd_start = None
+            # Recovered from drawdown
+            elif current_dd_start is not None:
+                time_diff = timestamps[i] - current_dd_start
+                # Handle both pandas Timedelta and numpy timedelta64
+                if hasattr(time_diff, "total_seconds"):
+                    duration = time_diff.total_seconds() / 86400
+                else:
+                    # numpy timedelta64
+                    duration = float(time_diff / np.timedelta64(1, "D"))
+                max_dd_duration = max(max_dd_duration, duration)
+                current_dd_start = None
 
         # Check if still in drawdown at end
         if current_dd_start is not None:
@@ -591,12 +586,8 @@ class ReportGenerator:
         avg_ladder_depth_short = float(len(short_orders))
 
         # Fill rate
-        filled_orders = self.orders[
-            self.orders["status"].isin(["FILLED", "PARTIALLY_FILLED"])
-        ]
-        ladder_fill_rate_pct = (
-            (len(filled_orders) / len(self.orders) * 100) if len(self.orders) > 0 else 0.0
-        )
+        filled_orders = self.orders[self.orders["status"].isin(["FILLED", "PARTIALLY_FILLED"])]
+        ladder_fill_rate_pct = (len(filled_orders) / len(self.orders) * 100) if len(self.orders) > 0 else 0.0
 
         return {
             "avg_ladder_depth_long": avg_ladder_depth_long,

@@ -608,10 +608,7 @@ def test_parity_backtest_vs_paper(
         test_instrument_id,
         random_seed,
     )
-    console.print(
-        f"[green]✓[/green] Backtest completed: "
-        f"{len(backtest_results.get('orders', []))} orders\n"
-    )
+    console.print(f"[green]✓[/green] Backtest completed: " f"{len(backtest_results.get('orders', []))} orders\n")
 
     # Run paper mode
     console.print("[yellow]Running paper mode...[/yellow]")
@@ -622,10 +619,7 @@ def test_parity_backtest_vs_paper(
         test_instrument_id,
         random_seed,
     )
-    console.print(
-        f"[green]✓[/green] Paper mode completed: "
-        f"{len(paper_results.get('orders', []))} orders\n"
-    )
+    console.print(f"[green]✓[/green] Paper mode completed: " f"{len(paper_results.get('orders', []))} orders\n")
 
     # Compare results
     console.print("[yellow]Comparing results...[/yellow]\n")
@@ -642,9 +636,7 @@ def test_parity_backtest_vs_paper(
         console.print("\n[green]✓ Parity test PASSED - all metrics within tolerance[/green]\n")
 
 
-@pytest.mark.skip(
-    reason="BacktestConfig API changed - determinism test needs refactoring to new schema"
-)
+@pytest.mark.skip(reason="BacktestConfig API changed - determinism test needs refactoring to new schema")
 def test_backtest_determinism(
     sample_catalog,
     test_strategy_config_path,
@@ -690,9 +682,7 @@ def test_backtest_determinism(
         assert (
             o1["filled_qty"] == o2["filled_qty"]
         ), f"Order {i} filled_qty mismatch: {o1['filled_qty']} != {o2['filled_qty']}"
-        assert (
-            o1["avg_px"] == o2["avg_px"]
-        ), f"Order {i} avg_px mismatch: {o1['avg_px']} != {o2['avg_px']}"
+        assert o1["avg_px"] == o2["avg_px"], f"Order {i} avg_px mismatch: {o1['avg_px']} != {o2['avg_px']}"
 
     # Compare account state
     account1 = results1.get("account", {})

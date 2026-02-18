@@ -37,23 +37,23 @@ def main():
     # Realistic constraints for 1 month of backtest data
     # These are calibrated for grid trading with limited data
     constraints = ConstraintThresholds(
-        min_sharpe_ratio=0.2,       # Lower threshold for short backtest (was 0.5)
-        max_drawdown_pct=40.0,      # Allow higher drawdown for volatile crypto (was 30.0)
-        min_trades=5,               # Minimum 5 grid fills for validity (was 10)
-        min_win_rate_pct=35.0,      # Lower win rate acceptable (was 40.0)
-        min_profit_factor=1.05,     # Small edge is acceptable (was 1.1)
-        min_calmar_ratio=0.1        # Very relaxed Calmar for discovery (was 0.3)
+        min_sharpe_ratio=0.2,  # Lower threshold for short backtest (was 0.5)
+        max_drawdown_pct=40.0,  # Allow higher drawdown for volatile crypto (was 30.0)
+        min_trades=5,  # Minimum 5 grid fills for validity (was 10)
+        min_win_rate_pct=35.0,  # Lower win rate acceptable (was 40.0)
+        min_profit_factor=1.05,  # Small edge is acceptable (was 1.1)
+        min_calmar_ratio=0.1,  # Very relaxed Calmar for discovery (was 0.3)
     )
 
     # Initialize optimizer with updated parameter bounds (from param_space.py)
     optimizer = StrategyOptimizer(
         backtest_config_path=backtest_config,
         base_strategy_config_path=strategy_config,
-        n_trials=10,                    # Start with 10 trials to test
-        n_jobs=4,                       # Parallel (faster for multiple trials)
+        n_trials=10,  # Start with 10 trials to test
+        n_jobs=4,  # Parallel (faster for multiple trials)
         study_name="hedge_grid_fixed_optimization_short",
         constraint_thresholds=constraints,
-        verbose=True
+        verbose=True,
     )
 
     # Run optimization
@@ -79,7 +79,7 @@ def main():
 
     study = optimizer.optimize()
 
-    print(f"\n✓ Optimization complete!")
+    print("\n✓ Optimization complete!")
     print(f"Best score: {study.best_value:.4f}")
     print(f"Best trial: {study.best_trial.number}")
 
@@ -96,11 +96,11 @@ def main():
     # Show summary statistics - use optimizer's actual validation counts
     print("\nOptimization Summary:")
     # Trials that passed constraint validation (not just didn't crash)
-    valid_trials = [t for t in study.trials
-                   if t.user_attrs.get('is_valid', False)]
+    valid_trials = [t for t in study.trials if t.user_attrs.get("is_valid", False)]
     # Trials that completed (have a score, even if invalid)
-    completed_trials = [t for t in study.trials
-                       if t.values is not None and len(t.values) > 0 and t.values[0] > float("-inf")]
+    completed_trials = [
+        t for t in study.trials if t.values is not None and len(t.values) > 0 and t.values[0] > float("-inf")
+    ]
 
     print(f"  Total trials: {len(study.trials)}")
     print(f"  Completed trials: {len(completed_trials)}")
