@@ -71,7 +71,7 @@ def main(
     runner.run(
         strategy_config=strategy_config,
         venue_config=venue_config,
-        require_api_keys=False,
+        require_api_keys=True,
         enable_ops=enable_ops,
         prometheus_port=prometheus_port,
         api_port=api_port,

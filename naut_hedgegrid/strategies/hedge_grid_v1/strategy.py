@@ -17,7 +17,9 @@ from nautilus_trader.model.enums import (
 from nautilus_trader.model.events import (
     OrderAccepted,
     OrderCanceled,
+    OrderCancelRejected,
     OrderDenied,
+    OrderExpired,
     OrderFilled,
     OrderRejected,
 )
@@ -809,6 +811,10 @@ class HedgeGridV1(Strategy):
             self.on_order_rejected(event)
         elif isinstance(event, OrderDenied):
             self.on_order_denied(event)
+        elif isinstance(event, OrderExpired):
+            self._on_order_expired(event)
+        elif isinstance(event, OrderCancelRejected):
+            self._on_order_cancel_rejected(event)
 
     def on_order_filled(self, event: OrderFilled) -> None:
         """
@@ -863,6 +869,15 @@ class HedgeGridV1(Strategy):
 
             # Only handle grid orders (not TP/SL orders)
             if not event.client_order_id.value.startswith(self._strategy_name):
+                return
+
+            # TP/SL fills are exit order completions -- no further TP/SL needed
+            if "-TP-" in client_order_id or "-SL-" in client_order_id:
+                order_type = "TP" if "-TP-" in client_order_id else "SL"
+                self.log.info(
+                    f"[{order_type} FILLED] Exit order filled: {event.client_order_id} "
+                    f"@ {event.last_px}, qty={event.last_qty}"
+                )
                 return
 
             # Parse client_order_id to get level and side
@@ -1384,6 +1399,67 @@ class HedgeGridV1(Strategy):
                 self._retry_handler.clear_history(client_order_id)
             self.log.debug(f"Cleaned up denied order {client_order_id} from retry tracking")
 
+    def _on_order_expired(self, event: OrderExpired) -> None:
+        """
+        Remove expired orders from grid cache to prevent ghost orders.
+
+        Expired orders are terminal -- they will never fill or be cancelable.
+        Without this handler, expired orders stay in _grid_orders_cache forever
+        and generate repeated failed cancel attempts every bar.
+
+        Args:
+            event: OrderExpired event from NautilusTrader
+
+        """
+        client_order_id = str(event.client_order_id.value)
+        if not client_order_id.startswith(self._strategy_name):
+            return
+
+        self.log.info(f"Order expired: {event.client_order_id}")
+
+        # Remove grid order from internal cache
+        if "-TP-" not in client_order_id and "-SL-" not in client_order_id:
+            with self._grid_orders_lock:
+                removed = self._grid_orders_cache.pop(client_order_id, None)
+                if removed:
+                    self.log.info(f"Evicted expired order from grid cache: {client_order_id}")
+
+        # Clean up retry tracking
+        if client_order_id in self._pending_retries:
+            del self._pending_retries[client_order_id]
+            if self._retry_handler is not None:
+                self._retry_handler.clear_history(client_order_id)
+
+    def _on_order_cancel_rejected(self, event: OrderCancelRejected) -> None:
+        """
+        Evict ghost orders when cancel is rejected (order already terminal).
+
+        When a cancel request fails, the order is typically already filled,
+        expired, or removed from the exchange. Cross-check Nautilus cache state
+        and evict from grid cache if the order is no longer open.
+
+        Args:
+            event: OrderCancelRejected event from NautilusTrader
+
+        """
+        client_order_id = str(event.client_order_id.value)
+        if not client_order_id.startswith(self._strategy_name):
+            return
+
+        reason = str(event.reason) if hasattr(event, "reason") else "unknown"
+        self.log.warning(f"Cancel rejected for {client_order_id}: {reason}")
+
+        # If order is closed/gone in Nautilus, remove from our cache
+        order = self.cache.order(event.client_order_id)
+        if order is None or order.is_closed:
+            if "-TP-" not in client_order_id and "-SL-" not in client_order_id:
+                with self._grid_orders_lock:
+                    removed = self._grid_orders_cache.pop(client_order_id, None)
+                    if removed:
+                        self.log.info(
+                            f"Evicted ghost order after cancel rejection: {client_order_id}"
+                        )
+
     def _execute_diff(self, diff_result) -> None:
         """
         Execute diff operations to reconcile desired vs live state.
@@ -1425,10 +1501,16 @@ class HedgeGridV1(Strategy):
         order = self.cache.order(ClientOrderId(intent.client_order_id))
         if order is None:
             self.log.warning(f"Cannot cancel: order {intent.client_order_id} not in cache")
+            # Evict from grid cache to prevent repeated cancel attempts
+            with self._grid_orders_lock:
+                self._grid_orders_cache.pop(intent.client_order_id, None)
             return
 
         if not order.is_open:
             self.log.debug(f"Order {intent.client_order_id} already closed, skipping cancel")
+            # Evict from grid cache to prevent repeated cancel attempts
+            with self._grid_orders_lock:
+                self._grid_orders_cache.pop(intent.client_order_id, None)
             return
 
         self.cancel_order(order)
@@ -1745,17 +1827,32 @@ class HedgeGridV1(Strategy):
 
     def _get_live_grid_orders(self) -> list[LiveOrder]:
         """
-        Get live grid orders from internal cache (O(1) performance).
+        Get live grid orders with state verification against Nautilus cache.
+
+        Cross-checks each cached order against Nautilus's authoritative order
+        state. Evicts any orders that are no longer open (filled, canceled,
+        expired) to prevent ghost orders from causing unnecessary cancel attempts.
 
         Returns:
-            List of LiveOrder objects for grid orders only (not TP/SL)
+            List of LiveOrder objects for currently open grid orders only
 
-        Note:
-            This method now uses an internal cache that is updated in real-time
-            via order event handlers (on_order_accepted, on_order_canceled, on_order_filled).
-            This provides O(1) performance instead of O(n) iteration through all orders.
         """
+        stale_ids: list[str] = []
         with self._grid_orders_lock:
+            for coid in self._grid_orders_cache:
+                order = self.cache.order(ClientOrderId(coid))
+                if order is None or order.is_closed:
+                    stale_ids.append(coid)
+
+            for coid in stale_ids:
+                self._grid_orders_cache.pop(coid, None)
+
+            if stale_ids:
+                self.log.info(
+                    f"Evicted {len(stale_ids)} stale orders from grid cache: "
+                    f"{stale_ids[:3]}{'...' if len(stale_ids) > 3 else ''}"
+                )
+
             return list(self._grid_orders_cache.values())
 
     # =====================================================================

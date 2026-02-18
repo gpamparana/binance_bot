@@ -635,109 +635,6 @@ class BaseRunner(ABC):
             sys.exit(1)
 
 
-class PaperRunner(BaseRunner):
-    """Paper trading runner with simulated execution.
-
-    This runner connects to real market data but simulates all order execution.
-    No real orders are placed, making it ideal for strategy testing without risk.
-    """
-
-    def create_exec_client_config(
-        self,
-        instrument_id: str,  # noqa: ARG002
-        venue_cfg: VenueConfig,  # noqa: ARG002
-        api_key: str | None,  # noqa: ARG002
-        api_secret: str | None,  # noqa: ARG002
-    ) -> BinanceExecClientConfig | None:
-        """Create execution client config for paper trading.
-
-        Paper trading uses simulated execution, so no exec client is needed.
-
-        Parameters
-        ----------
-        instrument_id : str
-            Instrument ID (unused for paper trading)
-        venue_cfg : VenueConfig
-            Venue configuration (unused for paper trading)
-        api_key : str | None
-            API key (unused for paper trading)
-        api_secret : str | None
-            API secret (unused for paper trading)
-
-        Returns
-        -------
-        None
-            No exec client for paper trading
-        """
-        return None
-
-    def get_runner_name(self) -> str:
-        """Get display name for paper trading runner.
-
-        Returns
-        -------
-        str
-            Display name
-        """
-        return "Paper Trading Runner"
-
-    def get_trader_id(self) -> str:
-        """Get trader ID for paper trading.
-
-        Returns
-        -------
-        str
-            Trader ID
-        """
-        return "PAPER-001"
-
-    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
-        """Display paper trading startup message.
-
-        Parameters
-        ----------
-        venue_cfg : VenueConfig
-            Venue configuration (unused)
-        """
-        # No warning needed for paper trading
-
-    def get_status_panel(
-        self,
-        hedge_grid_cfg: HedgeGridConfig,
-        instrument_id: str,
-        oms_type: OmsType,
-        venue_cfg: VenueConfig,  # noqa: ARG002
-    ) -> Panel:
-        """Create status display panel for paper trading.
-
-        Parameters
-        ----------
-        hedge_grid_cfg : HedgeGridConfig
-            Hedge grid configuration
-        instrument_id : str
-            Trading instrument ID
-        oms_type : OmsType
-            Order management system type
-        venue_cfg : VenueConfig
-            Venue configuration
-
-        Returns
-        -------
-        Panel
-            Status display panel
-        """
-        return Panel(
-            "[green]Paper Trading Active[/green]\n\n"
-            f"Strategy: {hedge_grid_cfg.strategy.name}\n"
-            f"Instrument: {instrument_id}\n"
-            f"OMS Type: {oms_type.name}\n"
-            f"Bar Type: 1-MINUTE-LAST\n\n"
-            "[cyan]Press CTRL-C to shutdown[/cyan]",
-            title="Status",
-            border_style="cyan",
-        )
-
-
 class LiveRunner(BaseRunner):
     """Live trading runner with real execution.
 
@@ -869,4 +766,94 @@ class LiveRunner(BaseRunner):
             "[cyan]Press CTRL-C to shutdown[/cyan]",
             title="Status",
             border_style="red",
+        )
+
+
+class PaperRunner(LiveRunner):
+    """Paper trading runner using testnet execution.
+
+    Inherits LiveRunner's execution client but overrides branding to indicate
+    paper trading mode. Requires a testnet venue config for safe testing.
+
+    Note: Requires API keys even for testnet, as Binance needs credentials
+    to load instrument definitions.
+    """
+
+    def get_runner_name(self) -> str:
+        """Get display name for paper trading runner.
+
+        Returns
+        -------
+        str
+            Display name
+        """
+        return "Paper Trading Runner (Testnet)"
+
+    def get_trader_id(self) -> str:
+        """Get trader ID for paper trading.
+
+        Returns
+        -------
+        str
+            Trader ID
+        """
+        return "PAPER-001"
+
+    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
+        """Display paper trading startup message with testnet safety check.
+
+        Parameters
+        ----------
+        venue_cfg : VenueConfig
+            Venue configuration
+        """
+        if not venue_cfg.api.testnet:
+            warning_panel = Panel(
+                "[bold yellow]WARNING: Paper mode but testnet is NOT enabled![/bold yellow]\n\n"
+                "Your venue config has testnet: false.\n"
+                "Paper trading should use a testnet venue config for safety.\n"
+                "Orders WILL be placed on the LIVE exchange.\n\n"
+                "[yellow]Consider using configs/venues/binance_futures_testnet.yaml[/yellow]",
+                title="CAUTION",
+                border_style="yellow",
+            )
+            self.console.print(warning_panel)
+            self.console.print()
+
+    def get_status_panel(
+        self,
+        hedge_grid_cfg: HedgeGridConfig,
+        instrument_id: str,
+        oms_type: OmsType,
+        venue_cfg: VenueConfig,
+    ) -> Panel:
+        """Create status display panel for paper trading.
+
+        Parameters
+        ----------
+        hedge_grid_cfg : HedgeGridConfig
+            Hedge grid configuration
+        instrument_id : str
+            Trading instrument ID
+        oms_type : OmsType
+            Order management system type
+        venue_cfg : VenueConfig
+            Venue configuration
+
+        Returns
+        -------
+        Panel
+            Status display panel
+        """
+        return Panel(
+            "[green]Paper Trading Active (Testnet)[/green]\n\n"
+            f"Strategy: {hedge_grid_cfg.strategy.name}\n"
+            f"Instrument: {instrument_id}\n"
+            f"OMS Type: {oms_type.name}\n"
+            f"Hedge Mode: {'Enabled' if venue_cfg.trading.hedge_mode else 'Disabled'}\n"
+            f"Testnet: {'Yes' if venue_cfg.api.testnet else 'No'}\n"
+            f"Bar Type: 1-MINUTE-LAST\n\n"
+            "[cyan]Press CTRL-C to shutdown[/cyan]",
+            title="Status",
+            border_style="cyan",
         )

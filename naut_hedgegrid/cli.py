@@ -38,7 +38,6 @@ Examples:
 """
 
 import json
-import sys
 from pathlib import Path
 
 import typer
@@ -125,12 +124,12 @@ def backtest(
             --run-id my_experiment_v1
     """
     # Import here to avoid circular dependencies
+    from nautilus_trader.model.enums import OmsType
+
     from naut_hedgegrid.config.backtest import BacktestConfigLoader
     from naut_hedgegrid.config.strategy import HedgeGridConfigLoader
     from naut_hedgegrid.runners.run_backtest import BacktestRunner
     from naut_hedgegrid.strategies.hedge_grid_v1 import HedgeGridV1Config
-
-    from nautilus_trader.model.enums import OmsType
 
     console.rule("[bold cyan]Nautilus Backtest Runner[/bold cyan]")
 
@@ -312,7 +311,7 @@ def paper(
     runner.run(
         strategy_config=strategy_config,
         venue_config=venue_config,
-        require_api_keys=False,
+        require_api_keys=True,
         enable_ops=enable_ops,
         prometheus_port=prometheus_port,
         api_port=api_port,
@@ -551,8 +550,12 @@ def flatten(
 
     except requests.exceptions.ConnectionError:
         console.print(f"\n[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
-        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
+        console.print(
+            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
+        )
+        console.print(
+            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
+        )
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"\n[red]HTTP Error: {e}[/red]")
@@ -687,8 +690,12 @@ def status(
 
     except requests.exceptions.ConnectionError:
         console.print(f"[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
-        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
+        console.print(
+            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
+        )
+        console.print(
+            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
+        )
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"[red]HTTP Error: {e}[/red]")
@@ -805,8 +812,12 @@ def metrics(
 
     except requests.exceptions.ConnectionError:
         console.print(f"[red]Error: Could not connect to {host}:{port}[/red]")
-        console.print("\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]")
-        console.print("[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]")
+        console.print(
+            "\n[yellow]Make sure paper/live trading is running with --enable-ops[/yellow]"
+        )
+        console.print(
+            "[yellow]Example: uv run python -m naut_hedgegrid paper --enable-ops[/yellow]"
+        )
         raise typer.Exit(code=1)
     except requests.exceptions.HTTPError as e:
         console.print(f"[red]HTTP Error: {e}[/red]")
