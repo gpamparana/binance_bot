@@ -10,10 +10,12 @@ This package provides emergency controls and monitoring systems for live trading
 
 from naut_hedgegrid.ops.alerts import AlertManager, AlertSeverity
 from naut_hedgegrid.ops.kill_switch import CircuitBreakerTriggered, KillSwitch
+from naut_hedgegrid.ops.manager import OperationsManager
 
 __all__ = [
     "AlertManager",
     "AlertSeverity",
     "CircuitBreakerTriggered",
     "KillSwitch",
+    "OperationsManager",
 ]

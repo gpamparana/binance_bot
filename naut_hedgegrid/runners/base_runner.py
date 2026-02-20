@@ -331,6 +331,7 @@ class BaseRunner(ABC):
             exec_engine_config = LiveExecEngineConfig(
                 reconciliation=True,
                 reconciliation_instrument_ids=[instrument_id],  # Only reconcile this instrument
+                reconciliation_lookback_mins=10,  # Only replay recent fills, not full history
             )
 
         return TradingNodeConfig(
@@ -434,14 +435,14 @@ class BaseRunner(ABC):
                 strategy_config, venue_config
             )
 
-            # Extract API keys from venue config (already resolved from env vars)
-            api_key = venue_cfg.api.api_key
-            api_secret = venue_cfg.api.api_secret
+            # Extract exchange API keys from venue config (already resolved from env vars)
+            exchange_api_key = venue_cfg.api.api_key
+            exchange_api_secret = venue_cfg.api.api_secret
 
             # Validate that API keys are present if required
             if require_api_keys:
                 self.console.print("[bold]Validating API credentials...[/bold]")
-                if not api_key or not api_secret:
+                if not exchange_api_key or not exchange_api_secret:
                     self.console.print("[red]Error: API credentials not found in venue config[/red]")
                     self.console.print(
                         "[yellow]Check that your .env file has the correct environment variables:[/yellow]"
@@ -478,16 +479,16 @@ class BaseRunner(ABC):
             data_client_config = self.create_data_client_config(
                 instrument_id=instrument_id,
                 venue_cfg=venue_cfg,
-                api_key=api_key,
-                api_secret=api_secret,
+                api_key=exchange_api_key,
+                api_secret=exchange_api_secret,
             )
 
             # Create execution client config (subclass-specific)
             exec_client_config = self.create_exec_client_config(
                 instrument_id=instrument_id,
                 venue_cfg=venue_cfg,
-                api_key=api_key,
-                api_secret=api_secret,
+                api_key=exchange_api_key,
+                api_secret=exchange_api_secret,
             )
 
             # Create node config with instrument filtering
@@ -531,23 +532,15 @@ class BaseRunner(ABC):
                 self.node.build()
                 self.console.print("[green]✓[/green] Node built successfully")
 
-                # Start the node (this calls on_start() for strategies and begins event loop)
-                # The strategy will handle its own warmup in on_start() if enabled
-                self.node.run()
-                self.console.print("[green]✓[/green] Node started, waiting for bars...")
-                self.console.print()
-
-                # Start operational infrastructure if enabled
+                # Start operational infrastructure BEFORE node.run() since run() blocks
                 if enable_ops:
                     self.console.print("[bold]Starting operational infrastructure...[/bold]")
                     try:
-                        # Import here to avoid circular dependency
                         from naut_hedgegrid.ops import OperationsManager
 
-                        # Get strategy instance from node
-                        strategy = self.node.trader.strategy_states()[0]
+                        # Strategy objects are available after build(), before run()
+                        strategy = self.node.trader.strategies()[0]
 
-                        # Initialize ops manager
                         self.ops_manager = OperationsManager(
                             strategy=strategy,
                             instrument_id=instrument_id,
@@ -555,8 +548,6 @@ class BaseRunner(ABC):
                             api_port=api_port,
                             api_key=api_key,
                         )
-
-                        # Start services
                         self.ops_manager.start()
                         self.console.print(
                             f"[green]✓[/green] Prometheus metrics: http://localhost:{prometheus_port}/metrics"
@@ -582,9 +573,9 @@ class BaseRunner(ABC):
                 self.console.print(status_panel)
                 self.console.print()
 
-                # Event-based wait (no blocking sleep!)
-                # This blocks efficiently until shutdown_event is set
-                self.shutdown_event.wait()
+                # node.run() starts the event loop and BLOCKS until shutdown
+                self.console.print("[bold]Starting trading node (event loop)...[/bold]")
+                self.node.run()
 
             except KeyboardInterrupt:
                 self.console.print("\n[yellow]Keyboard interrupt detected[/yellow]")

@@ -701,6 +701,15 @@ class HedgeGridV1(Strategy):
             self.log.info(f"Grid recentering triggered at mid={mid:.2f}")
             self._grid_center = mid
 
+            # CRITICAL FIX: Clear fill tracking on recenter so new grid levels
+            # can get TP/SL orders. Old fill_keys (e.g., "LONG-5") are stale
+            # because level 5 is now at a completely different price.
+            old_count = len(self._fills_with_exits)
+            with self._fills_lock:
+                self._fills_with_exits.clear()
+            if old_count > 0:
+                self.log.info(f"[RECENTER] Cleared {old_count} stale fill tracking entries")
+
         # Build ladders
         ladders = GridEngine.build_ladders(
             mid=self._grid_center,  # Use stable grid center, not current price
@@ -857,6 +866,34 @@ class HedgeGridV1(Strategy):
                     f"[{order_type} FILLED] Exit order filled: {event.client_order_id} "
                     f"@ {event.last_px}, qty={event.last_qty}"
                 )
+
+                # CRITICAL FIX: Remove fill_key from tracking so the same level
+                # can get new TP/SL orders on future grid fills.
+                # Without this, the _fills_with_exits set grows forever and blocks
+                # all repeat fills at the same level from getting exit orders.
+                # Order ID format: HG1-TP-L01-timestamp-counter or HG1-SL-S05-timestamp-counter
+                try:
+                    parts = client_order_id.split("-")
+                    if len(parts) >= 3:
+                        side_level_part = parts[2]  # e.g., "L01" or "S05"
+                        if len(side_level_part) >= 2:
+                            side_abbr = side_level_part[0]  # "L" or "S"
+                            level_str = side_level_part[1:]  # "01" or "05"
+                            side_name = "LONG" if side_abbr == "L" else "SHORT"
+                            exit_level = int(level_str)
+                            exit_fill_key = f"{side_name}-{exit_level}"
+                            with self._fills_lock:
+                                if exit_fill_key in self._fills_with_exits:
+                                    self._fills_with_exits.discard(exit_fill_key)
+                                    self.log.info(
+                                        f"[{order_type} CLEANUP] Removed {exit_fill_key} from tracking, "
+                                        f"level available for new TP/SL"
+                                    )
+                except (ValueError, IndexError) as e:
+                    self.log.warning(
+                        f"Could not extract fill_key from {order_type} order ID: {client_order_id}, error: {e}"
+                    )
+
                 return
 
             # Parse client_order_id to get level and side
@@ -1613,13 +1650,18 @@ class HedgeGridV1(Strategy):
         if self._precision_guard:
             tp_price = self._precision_guard.clamp_price(tp_price)
 
+        # NOTE: reduce_only=False because Nautilus's internal RiskEngine
+        # incorrectly evaluates reduce-only against the net position in hedge mode
+        # (OMS_HEDGING), denying orders that would reduce one side when the other
+        # side also exists. The position_id suffix ensures correct side targeting,
+        # and Binance's own hedge mode enforces position-side scoping.
         order = self.order_factory.limit(
             instrument_id=self._instrument.id,
             order_side=order_side,
             quantity=Quantity(quantity, precision=self._instrument.size_precision),
             price=Price(tp_price, precision=self._instrument.price_precision),
             time_in_force=TimeInForce.GTC,
-            reduce_only=True,
+            reduce_only=False,
             client_order_id=ClientOrderId(client_order_id_str),
         )
 
@@ -1712,6 +1754,7 @@ class HedgeGridV1(Strategy):
                     if self._precision_guard:
                         sl_price = self._precision_guard.clamp_price(sl_price)
 
+        # NOTE: reduce_only=False for same reason as TP orders - see _create_tp_order
         order = self.order_factory.stop_market(
             instrument_id=self._instrument.id,
             order_side=order_side,
@@ -1719,7 +1762,7 @@ class HedgeGridV1(Strategy):
             trigger_price=Price(sl_price, precision=self._instrument.price_precision),
             trigger_type=TriggerType.LAST_PRICE,
             time_in_force=TimeInForce.GTC,
-            reduce_only=True,
+            reduce_only=False,
             client_order_id=ClientOrderId(client_order_id_str),
         )
 
@@ -2124,12 +2167,13 @@ class HedgeGridV1(Strategy):
             close_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
 
             # Create market order
+            # NOTE: reduce_only=False for same reason as TP/SL - see _create_tp_order
             order = self.order_factory.market(
                 instrument_id=self._instrument.id,
                 order_side=close_side,
                 quantity=position.quantity,
                 time_in_force=TimeInForce.IOC,
-                reduce_only=True,
+                reduce_only=False,
             )
 
             self.submit_order(order, position_id=position_id)

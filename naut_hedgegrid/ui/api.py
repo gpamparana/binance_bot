@@ -255,8 +255,8 @@ class StrategyAPI:
         Raises:
             HTTPException: If API key is required but missing or invalid
         """
-        if self.api_key is None:
-            return  # Authentication disabled
+        if not self.api_key:
+            return  # Authentication disabled (no key configured)
 
         if x_api_key is None or x_api_key != self.api_key:
             raise HTTPException(
