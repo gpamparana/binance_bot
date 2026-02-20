@@ -31,7 +31,17 @@
       "Bash(git checkout:*)",
       "Bash(SKIP=ruff git commit:*)",
       "Bash(git push:*)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(uv run ruff format:*)",
+      "Bash(uv run pre-commit:*)",
+      "Bash(uv run:*)",
+      "Bash(ls:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(ps:*)",
+      "Bash(find:*)",
+      "Bash(env:*)",
+      "Bash(pgrep:*)"
     ],
     "deny": [],
     "ask": []
