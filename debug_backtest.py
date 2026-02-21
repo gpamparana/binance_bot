@@ -136,7 +136,7 @@ def main():
         if len(orders) > 0:
             print("\nFirst 5 orders:")
             for i, order in enumerate(list(orders)[:5]):
-                print(f"  {i+1}. {order}")
+                print(f"  {i + 1}. {order}")
         else:
             print("\n⚠️  NO ORDERS WERE PLACED!")
             print("\nPossible reasons:")

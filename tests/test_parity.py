@@ -608,7 +608,7 @@ def test_parity_backtest_vs_paper(
         test_instrument_id,
         random_seed,
     )
-    console.print(f"[green]✓[/green] Backtest completed: " f"{len(backtest_results.get('orders', []))} orders\n")
+    console.print(f"[green]✓[/green] Backtest completed: {len(backtest_results.get('orders', []))} orders\n")
 
     # Run paper mode
     console.print("[yellow]Running paper mode...[/yellow]")
@@ -619,7 +619,7 @@ def test_parity_backtest_vs_paper(
         test_instrument_id,
         random_seed,
     )
-    console.print(f"[green]✓[/green] Paper mode completed: " f"{len(paper_results.get('orders', []))} orders\n")
+    console.print(f"[green]✓[/green] Paper mode completed: {len(paper_results.get('orders', []))} orders\n")
 
     # Compare results
     console.print("[yellow]Comparing results...[/yellow]\n")

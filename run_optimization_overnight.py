@@ -82,7 +82,7 @@ def main():
     print(f"  Total trials: {len(study.trials)}")
     print(f"  Completed trials: {len(completed_trials)}")
     print(f"  Valid trials (passed constraints): {len(valid_trials)}")
-    print(f"  Validity rate: {len(valid_trials)/len(study.trials)*100:.1f}%" if study.trials else "N/A")
+    print(f"  Validity rate: {len(valid_trials) / len(study.trials) * 100:.1f}%" if study.trials else "N/A")
 
     if completed_trials:
         scores = [t.values[0] for t in completed_trials]
@@ -90,7 +90,7 @@ def main():
         if valid_trials:
             valid_scores = [t.values[0] for t in valid_trials]
             print(f"  Best valid score: {max(valid_scores):.4f}")
-            print(f"  Avg valid score: {sum(valid_scores)/len(valid_scores):.4f}")
+            print(f"  Avg valid score: {sum(valid_scores) / len(valid_scores):.4f}")
         else:
             print("  No trials passed constraint validation")
 

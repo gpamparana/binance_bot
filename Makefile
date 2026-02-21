@@ -37,7 +37,7 @@ lint:
 
 # Type check with mypy
 typecheck:
-	uv run mypy src/
+	uv run mypy naut_hedgegrid/
 
 # Run tests with pytest
 test:

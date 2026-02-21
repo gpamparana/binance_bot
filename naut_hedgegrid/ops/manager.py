@@ -95,6 +95,25 @@ class OperationsManager:
         self._metrics_thread.start()
         logger.info("Metrics polling thread started (5s interval)")
 
+        # 4. Start KillSwitch monitoring
+        try:
+            from naut_hedgegrid.config.operations import KillSwitchConfig
+            from naut_hedgegrid.ops.kill_switch import KillSwitch
+
+            kill_switch_config = KillSwitchConfig()
+            self._kill_switch = KillSwitch(
+                strategy=self.strategy,
+                config=kill_switch_config,
+                alert_manager=None,
+            )
+            self._kill_switch.start_monitoring()
+            if hasattr(self.strategy, "attach_kill_switch"):
+                self.strategy.attach_kill_switch(self._kill_switch)
+            logger.info("Kill switch monitoring started")
+        except Exception as e:
+            logger.warning(f"Kill switch failed to start: {e}. Continuing without kill switch.")
+            self._kill_switch = None
+
         self.is_running = True
         logger.info("OperationsManager started successfully")
 
@@ -212,7 +231,7 @@ class OperationsManager:
 
             if operation == "set_throttle":
                 throttle = params.get("throttle", 1.0)
-                self.strategy._throttle = float(throttle)  # noqa: SLF001
+                self.strategy.set_throttle(float(throttle))
                 return {"success": True, "throttle": throttle}
 
             if operation == "get_ladders":

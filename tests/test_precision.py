@@ -87,9 +87,9 @@ def test_clamp_price_always_on_tick_boundary(price, tick):
     # Clamped price should be exact multiple of tick (within floating point precision)
     remainder = abs(clamped % tick)
     # Check remainder is either ~0 or ~tick (handles floating point precision)
-    assert remainder < tick * 1e-6 or abs(remainder - tick) < tick * 1e-6, (
-        f"Clamped price {clamped} not on tick boundary. " f"Remainder: {remainder}, tick: {tick}"
-    )
+    assert (
+        remainder < tick * 1e-6 or abs(remainder - tick) < tick * 1e-6
+    ), f"Clamped price {clamped} not on tick boundary. Remainder: {remainder}, tick: {tick}"
 
 
 @given(price=random_price, tick=random_tick_size)
@@ -108,7 +108,7 @@ def test_clamp_price_minimizes_distance(price, tick):
     # Distance should be at most half a tick (rounding to nearest)
     distance = abs(clamped - price)
     assert distance <= tick / 2 + tick * 1e-6, (  # Add small epsilon for float precision
-        f"Distance {distance} exceeds half tick {tick/2}. " f"Original: {price}, clamped: {clamped}, tick: {tick}"
+        f"Distance {distance} exceeds half tick {tick / 2}. Original: {price}, clamped: {clamped}, tick: {tick}"
     )
 
 
@@ -125,9 +125,9 @@ def test_clamp_price_idempotent(price, tick):
     clamped_once = guard.clamp_price(price)
     clamped_twice = guard.clamp_price(clamped_once)
 
-    assert clamped_once == pytest.approx(clamped_twice), (
-        f"Clamping is not idempotent. " f"First: {clamped_once}, second: {clamped_twice}"
-    )
+    assert clamped_once == pytest.approx(
+        clamped_twice
+    ), f"Clamping is not idempotent. First: {clamped_once}, second: {clamped_twice}"
 
 
 @given(
@@ -154,9 +154,9 @@ def test_clamp_price_smaller_tick_more_precise(price, tick1, tick2):
     distance2 = abs(clamped2 - price)
 
     # Smaller tick should give distance <= larger tick (or very close due to rounding)
-    assert distance1 <= distance2 + tick1 * 1e-6, (
-        f"Smaller tick {tick1} gave larger distance {distance1} " f"than larger tick {tick2} with distance {distance2}"
-    )
+    assert (
+        distance1 <= distance2 + tick1 * 1e-6
+    ), f"Smaller tick {tick1} gave larger distance {distance1} than larger tick {tick2} with distance {distance2}"
 
 
 # ============================================================================
@@ -180,9 +180,9 @@ def test_clamp_qty_always_on_step_boundary(qty, step):
 
     if clamped > 0:  # Only check non-zero results
         remainder = abs(clamped % step)
-        assert remainder < step * 1e-6 or abs(remainder - step) < step * 1e-6, (
-            f"Clamped qty {clamped} not on step boundary. " f"Remainder: {remainder}, step: {step}"
-        )
+        assert (
+            remainder < step * 1e-6 or abs(remainder - step) < step * 1e-6
+        ), f"Clamped qty {clamped} not on step boundary. Remainder: {remainder}, step: {step}"
 
 
 @given(qty=random_qty, step=random_step_size)
@@ -199,7 +199,7 @@ def test_clamp_qty_rounds_down(qty, step):
     clamped = guard.clamp_qty(qty)
 
     # Clamped should never exceed original (within tiny float precision margin)
-    assert clamped <= qty + step * 1e-9, f"Clamped qty {clamped} exceeds original {qty}. " f"Step: {step}"
+    assert clamped <= qty + step * 1e-9, f"Clamped qty {clamped} exceeds original {qty}. Step: {step}"
 
 
 @given(
@@ -272,9 +272,9 @@ def test_clamp_qty_distance_bounded_by_step(qty, step):
 
     if clamped > 0:  # Only check when not filtered to zero
         distance = abs(qty - clamped)
-        assert distance < step + step * 1e-6, (
-            f"Distance {distance} exceeds step size {step}. " f"Original: {qty}, clamped: {clamped}"
-        )
+        assert (
+            distance < step + step * 1e-6
+        ), f"Distance {distance} exceeds step size {step}. Original: {qty}, clamped: {clamped}"
 
 
 # ============================================================================
@@ -300,9 +300,9 @@ def test_validate_notional_threshold(price, qty, min_notional):
     notional = price * qty
 
     if notional >= min_notional - 1e-9:  # Account for float precision
-        assert result is True, f"Expected validation to pass. " f"Notional: {notional}, min: {min_notional}"
+        assert result is True, f"Expected validation to pass. Notional: {notional}, min: {min_notional}"
     else:
-        assert result is False, f"Expected validation to fail. " f"Notional: {notional}, min: {min_notional}"
+        assert result is False, f"Expected validation to fail. Notional: {notional}, min: {min_notional}"
 
 
 @given(
@@ -320,9 +320,9 @@ def test_validate_notional_zero_minimum_always_passes(price, qty):
 
     result = guard.validate_notional(price, qty)
 
-    assert result is True, (
-        f"Validation should pass with zero minimum. " f"Price: {price}, qty: {qty}, notional: {price * qty}"
-    )
+    assert (
+        result is True
+    ), f"Validation should pass with zero minimum. Price: {price}, qty: {qty}, notional: {price * qty}"
 
 
 @given(
@@ -466,9 +466,9 @@ def test_clamp_rung_filters_invalid_notional(price, qty, min_notional):
         notional = clamped_price * clamped_qty
 
         # Should fail notional check OR qty became zero
-        assert notional < min_notional or clamped_qty <= 0, (
-            f"Rung returned None but notional {notional} >= {min_notional} " f"and qty {clamped_qty} > 0"
-        )
+        assert (
+            notional < min_notional or clamped_qty <= 0
+        ), f"Rung returned None but notional {notional} >= {min_notional} and qty {clamped_qty} > 0"
 
 
 @given(
@@ -498,7 +498,7 @@ def test_clamp_rung_filters_below_minimum_qty(price, qty, min_qty):
     clamped = guard.clamp_rung(original)
 
     # Should return None because qty rounds down to zero or below minimum
-    assert clamped is None, f"Expected None for qty {qty} < min_qty {min_qty}, " f"but got valid rung"
+    assert clamped is None, f"Expected None for qty {qty} < min_qty {min_qty}, but got valid rung"
 
 
 @given(
@@ -525,7 +525,7 @@ def test_clamp_rung_with_valid_inputs_returns_rung(price, qty):
     clamped = guard.clamp_rung(original)
 
     # Should succeed for these reasonable inputs
-    assert clamped is not None, f"Expected valid rung for price={price}, qty={qty}, " f"but got None"
+    assert clamped is not None, f"Expected valid rung for price={price}, qty={qty}, but got None"
 
     # Verify it's actually clamped
     assert clamped.price > 0
@@ -555,9 +555,9 @@ def test_precision_guard_very_small_prices(price, tick):
 
     # Should still maintain tick alignment
     remainder = abs(clamped % tick)
-    assert remainder < tick * 1e-5 or abs(remainder - tick) < tick * 1e-5, (
-        f"Small price {price} not properly clamped to tick {tick}. " f"Clamped: {clamped}, remainder: {remainder}"
-    )
+    assert (
+        remainder < tick * 1e-5 or abs(remainder - tick) < tick * 1e-5
+    ), f"Small price {price} not properly clamped to tick {tick}. Clamped: {clamped}, remainder: {remainder}"
 
 
 @given(
@@ -578,9 +578,9 @@ def test_precision_guard_very_large_prices(price, tick):
 
     # Should still maintain tick alignment
     remainder = abs(clamped % tick)
-    assert remainder < tick * 1e-6 or abs(remainder - tick) < tick * 1e-6, (
-        f"Large price {price} not properly clamped to tick {tick}. " f"Clamped: {clamped}, remainder: {remainder}"
-    )
+    assert (
+        remainder < tick * 1e-6 or abs(remainder - tick) < tick * 1e-6
+    ), f"Large price {price} not properly clamped to tick {tick}. Clamped: {clamped}, remainder: {remainder}"
 
 
 @given(
@@ -602,9 +602,9 @@ def test_precision_guard_very_small_quantities(qty, step):
     if clamped > 0:
         # Should maintain step alignment
         remainder = abs(clamped % step)
-        assert remainder < step * 1e-5 or abs(remainder - step) < step * 1e-5, (
-            f"Small qty {qty} not properly clamped to step {step}. " f"Clamped: {clamped}, remainder: {remainder}"
-        )
+        assert (
+            remainder < step * 1e-5 or abs(remainder - step) < step * 1e-5
+        ), f"Small qty {qty} not properly clamped to step {step}. Clamped: {clamped}, remainder: {remainder}"
 
 
 @given(
@@ -624,9 +624,9 @@ def test_precision_guard_very_large_quantities(qty, step):
 
     # Should maintain step alignment
     remainder = abs(clamped % step)
-    assert remainder < step * 1e-6 or abs(remainder - step) < step * 1e-6, (
-        f"Large qty {qty} not properly clamped to step {step}. " f"Clamped: {clamped}, remainder: {remainder}"
-    )
+    assert (
+        remainder < step * 1e-6 or abs(remainder - step) < step * 1e-6
+    ), f"Large qty {qty} not properly clamped to step {step}. Clamped: {clamped}, remainder: {remainder}"
 
 
 @given(

@@ -42,7 +42,7 @@ class TestCSVFileReading:
         csv_file = tmp_path / "trades.csv.gz"
 
         # Write compressed CSV
-        csv_data = "timestamp,price,size,side,id\n" "2024-01-01T00:00:00Z,50000,0.1,BUY,123\n"
+        csv_data = "timestamp,price,size,side,id\n2024-01-01T00:00:00Z,50000,0.1,BUY,123\n"
         with gzip.open(csv_file, "wt") as f:
             f.write(csv_data)
 
@@ -86,7 +86,7 @@ class TestCSVColumnMapping:
     def test_explicit_column_mapping(self, tmp_path):
         """Test explicit column mapping works."""
         csv_file = tmp_path / "trades.csv"
-        csv_file.write_text("time,last_price,volume,taker_side,tx_id\n" "2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
+        csv_file.write_text("time,last_price,volume,taker_side,tx_id\n2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
 
         config = {
             "trades": {
@@ -116,7 +116,7 @@ class TestCSVColumnMapping:
     def test_auto_detection_common_names(self, tmp_path):
         """Test auto-detection of common column names."""
         csv_file = tmp_path / "trades.csv"
-        csv_file.write_text("time,price,quantity,side,id\n" "2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
+        csv_file.write_text("time,price,quantity,side,id\n2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
 
         config = {"trades": {"file_path": "trades.csv"}}
         source = CSVDataSource(config=config, base_path=str(tmp_path))
@@ -136,7 +136,7 @@ class TestCSVColumnMapping:
     def test_case_insensitive_column_matching(self, tmp_path):
         """Test that column matching is case-insensitive."""
         csv_file = tmp_path / "trades.csv"
-        csv_file.write_text("TIMESTAMP,PRICE,SIZE,SIDE,ID\n" "2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
+        csv_file.write_text("TIMESTAMP,PRICE,SIZE,SIDE,ID\n2024-01-01T00:00:00Z,50000,0.1,BUY,123\n")
 
         config = {"trades": {"file_path": "trades.csv"}}
         source = CSVDataSource(config=config, base_path=str(tmp_path))
@@ -243,7 +243,7 @@ class TestCSVDataFetching:
     async def test_fetch_mark_prices_success(self, tmp_path, start_date, end_date):
         """Test successful mark price fetching."""
         csv_file = tmp_path / "mark.csv"
-        csv_file.write_text("timestamp,mark_price\n" "2024-01-01T00:00:00Z,50001\n" "2024-01-01T12:00:00Z,50002\n")
+        csv_file.write_text("timestamp,mark_price\n2024-01-01T00:00:00Z,50001\n2024-01-01T12:00:00Z,50002\n")
 
         config = {"mark": {"file_path": "mark.csv"}}
         source = CSVDataSource(config=config, base_path=str(tmp_path))
@@ -257,7 +257,7 @@ class TestCSVDataFetching:
         """Test successful funding rate fetching."""
         csv_file = tmp_path / "funding.csv"
         csv_file.write_text(
-            "timestamp,funding_rate,next_funding_time\n" "2024-01-01T00:00:00Z,0.0001,2024-01-01T08:00:00Z\n"
+            "timestamp,funding_rate,next_funding_time\n2024-01-01T00:00:00Z,0.0001,2024-01-01T08:00:00Z\n"
         )
 
         config = {"funding": {"file_path": "funding.csv"}}
@@ -272,7 +272,7 @@ class TestCSVDataFetching:
     async def test_fetch_funding_without_next_funding_time(self, tmp_path, start_date, end_date):
         """Test funding rate fetching when next_funding_time is missing."""
         csv_file = tmp_path / "funding.csv"
-        csv_file.write_text("timestamp,funding_rate\n" "2024-01-01T00:00:00Z,0.0001\n")
+        csv_file.write_text("timestamp,funding_rate\n2024-01-01T00:00:00Z,0.0001\n")
 
         config = {"funding": {"file_path": "funding.csv"}}
         source = CSVDataSource(config=config, base_path=str(tmp_path))
@@ -308,7 +308,7 @@ class TestCSVEdgeCases:
         """Test CSV with special characters in trade_id."""
         csv_file = tmp_path / "trades.csv"
         csv_file.write_text(
-            "timestamp,price,size,aggressor_side,trade_id\n" '2024-01-01T00:00:00Z,50000,0.1,BUY,"abc-123_xyz"\n'
+            'timestamp,price,size,aggressor_side,trade_id\n2024-01-01T00:00:00Z,50000,0.1,BUY,"abc-123_xyz"\n'
         )
 
         config = {"trades": {"file_path": "trades.csv"}}
@@ -323,8 +323,7 @@ class TestCSVEdgeCases:
         """Test handling of different timestamp formats."""
         csv_file = tmp_path / "trades.csv"
         csv_file.write_text(
-            "timestamp,price,size,aggressor_side,trade_id\n"
-            "2024-01-01 00:00:00,50000,0.1,BUY,123\n"  # Different format
+            "timestamp,price,size,aggressor_side,trade_id\n2024-01-01 00:00:00,50000,0.1,BUY,123\n"  # Different format
         )
 
         config = {"trades": {"file_path": "trades.csv"}}

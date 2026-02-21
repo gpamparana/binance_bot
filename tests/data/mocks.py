@@ -333,8 +333,5 @@ class MockDataSource(DataSource):
     def __repr__(self) -> str:
         """Return string representation."""
         return (
-            f"MockDataSource("
-            f"trades={len(self.trades_df)}, "
-            f"marks={len(self.mark_df)}, "
-            f"funding={len(self.funding_df)})"
+            f"MockDataSource(trades={len(self.trades_df)}, marks={len(self.mark_df)}, funding={len(self.funding_df)})"
         )

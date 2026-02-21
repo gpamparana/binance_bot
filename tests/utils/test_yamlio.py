@@ -96,7 +96,7 @@ def test_read_yaml_nested_env_vars(tmp_path: Path) -> None:
 
     yaml_file = tmp_path / "nested_env.yaml"
     yaml_file.write_text(
-        "parent:\n  child1: ${TEST_VAR1}\n  child2: ${TEST_VAR2}\n" "list:\n  - ${TEST_VAR1}\n  - ${TEST_VAR2}\n"
+        "parent:\n  child1: ${TEST_VAR1}\n  child2: ${TEST_VAR2}\nlist:\n  - ${TEST_VAR1}\n  - ${TEST_VAR2}\n"
     )
 
     data = read_yaml(yaml_file, resolve_env=True)

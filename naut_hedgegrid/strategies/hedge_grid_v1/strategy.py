@@ -33,6 +33,7 @@ from naut_hedgegrid.config.strategy import HedgeGridConfig, HedgeGridConfigLoade
 from naut_hedgegrid.domain.types import (
     Ladder,
     OrderIntent,
+    Rung,
     Side,
     parse_client_order_id,
 )
@@ -123,6 +124,11 @@ class HedgeGridV1(Strategy):
         self._fills_with_exits: set[str] = set()
         self._fills_lock = threading.Lock()  # Thread safety for fills tracking
 
+        # Track TP/SL pairs for OCO-like cancellation
+        # Maps fill_key (e.g., "LONG-5") -> (tp_client_order_id, sl_client_order_id)
+        self._tp_sl_pairs: dict[str, tuple[str, str]] = {}
+        self._tp_sl_pairs_lock = threading.Lock()
+
         # Ladder state for snapshot access
         self._last_long_ladder: Ladder | None = None
         self._last_short_ladder: Ladder | None = None
@@ -166,6 +172,12 @@ class HedgeGridV1(Strategy):
 
         # Diagnostic logging throttle (initialize to 0 instead of using hasattr)
         self._last_diagnostic_log: int = 0
+
+        # Funding rate tracking (fed from mark price stream in live/paper trading)
+        self._last_funding_rate: float = 0.0
+
+        # Realized PnL tracking (accumulated from TP/SL fill events)
+        self._realized_pnl: float = 0.0
 
         # On-start position reconciliation flag
         self._positions_reconciled: bool = False
@@ -282,6 +294,22 @@ class HedgeGridV1(Strategy):
         self.subscribe_bars(self.bar_type)
         self.log.info(f"Subscribed to bars: {self.bar_type}")
 
+        # Subscribe to mark price updates for funding rate data (live/paper only)
+        try:
+            from nautilus_trader.adapters.binance.futures.types import BinanceFuturesMarkPriceUpdate
+            from nautilus_trader.model.data import DataType
+
+            mark_price_type = DataType(
+                BinanceFuturesMarkPriceUpdate,
+                metadata={"instrument_id": self.instrument_id},
+            )
+            self.subscribe_data(mark_price_type)
+            self.log.info("Subscribed to mark price updates for funding rate data")
+        except ImportError:
+            self.log.debug("BinanceFuturesMarkPriceUpdate not available (backtest mode), funding guard passive")
+        except Exception as e:
+            self.log.warning(f"Could not subscribe to mark price data: {e}")
+
         # Initialize metrics tracking
         self._start_time = self.clock.timestamp_ns()
         self._last_bar_time = None
@@ -290,8 +318,11 @@ class HedgeGridV1(Strategy):
         self.log.info("Metrics tracking initialized")
 
         # Risk management is already initialized in __init__
-        # All risk checks (_check_circuit_breaker, _check_drawdown_limit)
-        # are called during trading operations
+        # Risk checks are called during trading: drawdown in on_bar,
+        # circuit breaker in on_order_rejected/denied, validation in _execute_add
+
+        # Hydrate grid orders cache from exchange (prevents duplicate orders on restart)
+        self._hydrate_grid_orders_cache()
 
         # Perform warmup if configured
         # The warmup will fetch historical data and pre-warm the regime detector
@@ -517,6 +548,47 @@ class HedgeGridV1(Strategy):
 
         self.log.info("HedgeGridV1 strategy stopped")
 
+    def _hydrate_grid_orders_cache(self) -> None:
+        """Hydrate grid order cache from Nautilus cache after exchange reconciliation.
+
+        On restart, Nautilus reconciles open orders from the exchange. This method
+        reads those orders and populates _grid_orders_cache to prevent the first
+        on_bar() from placing duplicate grid orders.
+        """
+        try:
+            open_orders = self.cache.orders_open(venue=self._venue)
+        except Exception as e:
+            self.log.warning(f"Could not query open orders for cache hydration: {e}")
+            return
+
+        hydrated = 0
+        for order in open_orders:
+            client_order_id = str(order.client_order_id.value)
+
+            # Only track our grid orders (skip TP/SL and non-strategy orders)
+            if not client_order_id.startswith(self._strategy_name):
+                continue
+            if "-TP-" in client_order_id or "-SL-" in client_order_id:
+                continue
+
+            try:
+                parsed = self._parse_cached_order_id(client_order_id)
+                live_order = LiveOrder(
+                    client_order_id=client_order_id,
+                    side=parsed["side"],
+                    price=float(order.price) if hasattr(order, "price") else 0.0,
+                    qty=float(order.quantity),
+                    status="OPEN",
+                )
+                with self._grid_orders_lock:
+                    self._grid_orders_cache[client_order_id] = live_order
+                hydrated += 1
+            except (ValueError, KeyError) as e:
+                self.log.warning(f"Could not hydrate order {client_order_id}: {e}")
+
+        if hydrated > 0:
+            self.log.info(f"Hydrated {hydrated} existing grid orders from exchange cache")
+
     def _reconcile_existing_positions(self, mid: float) -> None:
         """Attach TP/SL to positions that existed before this session started.
 
@@ -686,6 +758,19 @@ class HedgeGridV1(Strategy):
                 self.log.info("Regime detector not warm yet, skipping trading")
             return
 
+        # Risk management checks (must run before any order operations)
+        self._check_drawdown_limit()
+        if self._pause_trading:
+            return
+
+        if self._circuit_breaker_active:
+            # Check if cooldown has expired (resets inside _check_circuit_breaker)
+            self._check_circuit_breaker()
+            if self._circuit_breaker_active:
+                if not self._is_optimization_mode:
+                    self.log.debug("Circuit breaker active, skipping bar")
+                return
+
         # One-time: reconcile pre-existing positions from previous session
         if not self._positions_reconciled:
             self._reconcile_existing_positions(mid)
@@ -701,14 +786,27 @@ class HedgeGridV1(Strategy):
             self.log.info(f"Grid recentering triggered at mid={mid:.2f}")
             self._grid_center = mid
 
-            # CRITICAL FIX: Clear fill tracking on recenter so new grid levels
-            # can get TP/SL orders. Old fill_keys (e.g., "LONG-5") are stale
-            # because level 5 is now at a completely different price.
+            # Cancel ALL orphaned TP/SL orders before clearing tracking.
+            # Old TP/SL orders are at stale prices relative to the new grid center.
+            cancelled_exits = self._cancel_all_exit_orders()
+
+            # Clear fill tracking so new grid levels can get TP/SL orders.
             old_count = len(self._fills_with_exits)
             with self._fills_lock:
                 self._fills_with_exits.clear()
-            if old_count > 0:
-                self.log.info(f"[RECENTER] Cleared {old_count} stale fill tracking entries")
+
+            # Clear TP/SL pair tracking
+            with self._tp_sl_pairs_lock:
+                self._tp_sl_pairs.clear()
+
+            if old_count > 0 or cancelled_exits > 0:
+                self.log.info(
+                    f"[RECENTER] Cleared {old_count} stale fill entries, "
+                    f"cancelled {cancelled_exits} orphaned TP/SL orders"
+                )
+
+            # Re-reconcile positions on next bar to re-attach TP/SL to surviving positions
+            self._positions_reconciled = False
 
         # Build ladders
         ladders = GridEngine.build_ladders(
@@ -753,10 +851,20 @@ class HedgeGridV1(Strategy):
         now = datetime.now(tz=UTC)
         ladders = self._funding_guard.adjust_ladders(ladders=ladders, now=now)
 
-        self.log.info(
-            f"After funding: {len(ladders)} ladder(s): "
-            + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
-        )
+        if not self._is_optimization_mode:
+            self.log.info(
+                f"After funding: {len(ladders)} ladder(s): "
+                + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
+            )
+
+        # Apply throttle factor to ladder quantities (from ops API)
+        if self._throttle < 1.0:
+            ladders = [self._apply_throttle(ladder) for ladder in ladders]
+            if not self._is_optimization_mode:
+                self.log.info(
+                    f"After throttle ({self._throttle:.2f}): "
+                    + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
+                )
 
         # Filter rungs that would cross the spread at current market price
         ladders = [ladder.filter_placeable(mid) for ladder in ladders]
@@ -807,6 +915,26 @@ class HedgeGridV1(Strategy):
             self._on_order_expired(event)
         elif isinstance(event, OrderCancelRejected):
             self._on_order_cancel_rejected(event)
+
+    def on_data(self, data) -> None:
+        """Handle custom data events (mark price updates with funding rate)."""
+        try:
+            from nautilus_trader.adapters.binance.futures.types import BinanceFuturesMarkPriceUpdate
+
+            if isinstance(data, BinanceFuturesMarkPriceUpdate):
+                funding_rate = float(data.funding_rate)
+                self._last_funding_rate = funding_rate
+
+                if self._funding_guard is not None and hasattr(data, "next_funding_time"):
+                    self._funding_guard.on_funding_update(
+                        rate=funding_rate,
+                        next_ts=data.next_funding_time,
+                    )
+        except ImportError:
+            pass
+        except Exception as e:
+            if not self._is_optimization_mode:
+                self.log.debug(f"Error processing mark price data: {e}")
 
     def on_order_filled(self, event: OrderFilled) -> None:
         """
@@ -867,6 +995,26 @@ class HedgeGridV1(Strategy):
                     f"@ {event.last_px}, qty={event.last_qty}"
                 )
 
+                # Track realized PnL from exit fills
+                try:
+                    fill_price = float(event.last_px)
+                    fill_qty = float(event.last_qty)
+                    parts = client_order_id.split("-")
+                    if len(parts) >= 3:
+                        side_abbr = parts[2][0] if len(parts[2]) >= 1 else None
+                        if side_abbr == "L":
+                            # Closing a LONG position: PnL = (sell_price - entry_price) * qty
+                            pos = self.cache.position(PositionId(f"{self.instrument_id}-LONG"))
+                            if pos and hasattr(pos, "avg_px_open"):
+                                self._realized_pnl += (fill_price - float(pos.avg_px_open)) * fill_qty
+                        elif side_abbr == "S":
+                            # Closing a SHORT position: PnL = (entry_price - buy_price) * qty
+                            pos = self.cache.position(PositionId(f"{self.instrument_id}-SHORT"))
+                            if pos and hasattr(pos, "avg_px_open"):
+                                self._realized_pnl += (float(pos.avg_px_open) - fill_price) * fill_qty
+                except Exception:
+                    pass  # Don't let PnL tracking break order handling
+
                 # CRITICAL FIX: Remove fill_key from tracking so the same level
                 # can get new TP/SL orders on future grid fills.
                 # Without this, the _fills_with_exits set grows forever and blocks
@@ -889,6 +1037,9 @@ class HedgeGridV1(Strategy):
                                         f"[{order_type} CLEANUP] Removed {exit_fill_key} from tracking, "
                                         f"level available for new TP/SL"
                                     )
+                            # OCO: Cancel the counterpart order (TP filled → cancel SL, and vice versa)
+                            self._cancel_counterpart_exit(exit_fill_key, order_type)
+
                 except (ValueError, IndexError) as e:
                     self.log.warning(
                         f"Could not extract fill_key from {order_type} order ID: {client_order_id}, error: {e}"
@@ -992,10 +1143,15 @@ class HedgeGridV1(Strategy):
                         self._fills_with_exits.discard(fill_key)
                     return
                 # Too many retries, position never appeared
-                self.log.error(f"[TP/SL FAILED] Position never appeared in cache for {fill_key} after 3 retries")
+                self.log.error(
+                    f"[TP/SL FAILED] Position never appeared in cache for {fill_key} "
+                    f"after 3 retries. Removing from tracking to allow future attempts."
+                )
                 # Clean up retry counter
                 del self._position_retry_counts[retry_key]
-                # Keep fill_key in set to prevent further attempts
+                # Remove fill_key so future fills at this level can attempt TP/SL again
+                with self._fills_lock:
+                    self._fills_with_exits.discard(fill_key)
                 return
 
             # Position found, clean up retry counter if it exists
@@ -1047,6 +1203,12 @@ class HedgeGridV1(Strategy):
                 self.submit_order(tp_order, position_id=position_id)
                 self.submit_order(sl_order, position_id=position_id)
 
+                # Track the TP/SL pair for OCO-like cancellation
+                tp_order_id = str(tp_order.client_order_id.value)
+                sl_order_id = str(sl_order.client_order_id.value)
+                with self._tp_sl_pairs_lock:
+                    self._tp_sl_pairs[fill_key] = (tp_order_id, sl_order_id)
+
                 self.log.info(
                     f"[TP/SL SUBMITTED] Successfully submitted TP/SL orders for {fill_key}: "
                     f"TP ID={tp_order.client_order_id}, SL ID={sl_order.client_order_id}"
@@ -1069,6 +1231,58 @@ class HedgeGridV1(Strategy):
             self._handle_critical_error()
             # Re-raise to ensure Nautilus knows about the error
             raise
+
+    def _cancel_counterpart_exit(self, fill_key: str, filled_type: str) -> None:
+        """Cancel the counterpart TP/SL order after one side fills (OCO-like behavior)."""
+        counterpart_type = "SL" if filled_type == "TP" else "TP"
+        with self._tp_sl_pairs_lock:
+            pair = self._tp_sl_pairs.pop(fill_key, None)
+
+        if pair is None:
+            self.log.debug(f"[OCO] No pair found for {fill_key}, may have been cleared by recenter")
+            return
+
+        tp_id, sl_id = pair
+        counterpart_id_str = sl_id if filled_type == "TP" else tp_id
+
+        try:
+            order = self.cache.order(ClientOrderId(counterpart_id_str))
+            if order is not None and order.is_open:
+                self.cancel_order(order)
+                self.log.info(
+                    f"[OCO CANCEL] Cancelled orphaned {counterpart_type} order "
+                    f"{counterpart_id_str} after {filled_type} filled for {fill_key}"
+                )
+            else:
+                self.log.debug(f"[OCO] {counterpart_type} order {counterpart_id_str} already closed, no cancel needed")
+        except Exception as e:
+            self.log.warning(f"[OCO CANCEL] Failed to cancel {counterpart_type} order {counterpart_id_str}: {e}")
+
+    def _cancel_all_exit_orders(self) -> int:
+        """Cancel all live TP/SL exit orders on the exchange.
+
+        Called during grid recenter to prevent orphaned exit orders at stale prices.
+
+        Returns
+        -------
+        int
+            Number of orders cancelled.
+
+        """
+        cancelled = 0
+        try:
+            for order in self.cache.orders_open(venue=self._venue):
+                order_id = order.client_order_id.value
+                if not order_id.startswith(self._strategy_name):
+                    continue
+                if "-TP-" in order_id or "-SL-" in order_id:
+                    if order.is_open:
+                        self.cancel_order(order)
+                        cancelled += 1
+                        self.log.debug(f"[RECENTER] Cancelled exit order: {order_id}")
+        except Exception as e:
+            self.log.error(f"[RECENTER] Error cancelling exit orders: {e}")
+        return cancelled
 
     def on_order_accepted(self, event: OrderAccepted) -> None:
         """
@@ -1356,6 +1570,9 @@ class HedgeGridV1(Strategy):
             # Non-critical error handling
             self.log.error(f"Error in on_order_rejected: {e}")
             # Continue processing - non-critical error
+        finally:
+            # Track rejection for circuit breaker monitoring
+            self._check_circuit_breaker()
 
     def on_order_denied(self, event) -> None:
         """
@@ -1389,6 +1606,9 @@ class HedgeGridV1(Strategy):
             if self._retry_handler is not None:
                 self._retry_handler.clear_history(client_order_id)
             self.log.debug(f"Cleaned up denied order {client_order_id} from retry tracking")
+
+        # Track denial for circuit breaker monitoring
+        self._check_circuit_breaker()
 
     def _on_order_expired(self, event: OrderExpired) -> None:
         """
@@ -1544,6 +1764,11 @@ class HedgeGridV1(Strategy):
 
         # Create limit order (this appends counter to client_order_id)
         order = self._create_limit_order(intent, self._instrument)
+
+        # Validate order size against account balance before submission
+        if not self._validate_order_size(order):
+            self.log.warning(f"Order {intent.client_order_id} rejected by position size validation")
+            return
 
         # Create position_id with side suffix
         position_id = PositionId(f"{self.instrument_id}-{intent.side.value}")
@@ -1951,6 +2176,34 @@ class HedgeGridV1(Strategy):
 
         self.log.info(f"Throttle set to {throttle:.2f}")
 
+    def _apply_throttle(self, ladder: Ladder) -> Ladder:
+        """Scale ladder quantities by throttle factor.
+
+        Args:
+            ladder: Original ladder
+
+        Returns:
+            New ladder with scaled quantities
+        """
+        if self._throttle >= 1.0:
+            return ladder
+
+        scaled_rungs = []
+        for rung in ladder.rungs:
+            scaled_qty = rung.qty * self._throttle
+            if scaled_qty > 0:
+                scaled_rungs.append(
+                    Rung(
+                        price=rung.price,
+                        qty=scaled_qty,
+                        side=rung.side,
+                        tp=rung.tp,
+                        sl=rung.sl,
+                        tag=rung.tag,
+                    )
+                )
+        return Ladder.from_list(ladder.side, scaled_rungs)
+
     def get_ladders_snapshot(self) -> dict:
         """
         Return current grid ladder state for API.
@@ -2018,17 +2271,24 @@ class HedgeGridV1(Strategy):
         return active_rungs
 
     def _get_margin_ratio(self) -> float:
-        """
-        Get current margin ratio from account.
+        """Get current margin ratio from account (margin_used / total_balance)."""
+        try:
+            account = self.portfolio.account(self._venue)
+            if account is None:
+                return 0.0
 
-        Note: This requires proper account object access. Currently returns 0.0
-        as placeholder. In production, implement based on Nautilus account structure.
-        """
-        # TODO: Implement once account object structure is confirmed
-        # account = self.cache.account(self.account_id)
-        # if account:
-        #     return float(account.margin_used) / float(account.margin_available)
-        return 0.0
+            from nautilus_trader.model.identifiers import Currency
+
+            base_currency = Currency.from_str("USDT")
+            total_balance = float(account.balance_total(base_currency))
+            if total_balance <= 0:
+                return 0.0
+
+            free_balance = float(account.balance_free(base_currency))
+            margin_used = total_balance - free_balance
+            return margin_used / total_balance
+        except Exception:
+            return 0.0
 
     def _calculate_maker_ratio(self) -> float:
         """Calculate ratio of maker fills vs total fills."""
@@ -2038,14 +2298,8 @@ class HedgeGridV1(Strategy):
         return self._maker_fills / self._total_fills
 
     def _get_current_funding_rate(self) -> float:
-        """
-        Get current funding rate from market data.
-
-        Note: This requires subscribing to funding rate updates. Currently returns 0.0
-        as placeholder. In production, implement based on Nautilus funding rate data.
-        """
-        # TODO: Subscribe to funding rate data and implement
-        return 0.0
+        """Get current funding rate from mark price stream."""
+        return self._last_funding_rate
 
     def _project_funding_cost_1h(self) -> float:
         """Project funding cost for next 1 hour based on current positions."""
@@ -2060,14 +2314,8 @@ class HedgeGridV1(Strategy):
         return long_cost + short_cost
 
     def _get_realized_pnl(self) -> float:
-        """
-        Get total realized PnL.
-
-        Note: This should track realized PnL from closed positions. Currently returns 0.0
-        as placeholder. In production, implement based on strategy tracking or Nautilus statistics.
-        """
-        # TODO: Implement realized PnL tracking
-        return 0.0
+        """Get total realized PnL accumulated from TP/SL fill events."""
+        return self._realized_pnl
 
     def _get_unrealized_pnl(self) -> float:
         """Get total unrealized PnL from open positions."""
@@ -2228,6 +2476,11 @@ class HedgeGridV1(Strategy):
         Returns:
             True if order size is valid, False otherwise
         """
+        # Check if position validation is enabled
+        if self._hedge_grid_config and self._hedge_grid_config.risk_management:
+            if not self._hedge_grid_config.risk_management.enable_position_validation:
+                return True
+
         try:
             account = self.portfolio.account(self._venue)
             if not account:
@@ -2243,10 +2496,8 @@ class HedgeGridV1(Strategy):
             base_currency = Currency.from_str("USDT")
             free_balance = float(account.balance_free(base_currency))
 
-            # Apply maximum position percentage (default 95%)
-            max_position_pct = (
-                getattr(self._hedge_grid_config, "max_position_pct", 0.95) if self._hedge_grid_config else 0.95
-            )
+            # Apply maximum position percentage from nested config
+            max_position_pct = self._hedge_grid_config.position.max_position_pct if self._hedge_grid_config else 0.95
 
             if notional > free_balance * max_position_pct:
                 self.log.warning(
@@ -2268,6 +2519,11 @@ class HedgeGridV1(Strategy):
         Monitors the error rate over a sliding window and activates
         the circuit breaker if too many errors occur.
         """
+        # Check if circuit breaker is enabled
+        rm_cfg = self._hedge_grid_config.risk_management if self._hedge_grid_config else None
+        if rm_cfg and not rm_cfg.enable_circuit_breaker:
+            return
+
         if self._circuit_breaker_active:
             # Check if cooldown period has passed
             if self._circuit_breaker_reset_time and self.clock.timestamp_ns() >= self._circuit_breaker_reset_time:
@@ -2285,8 +2541,8 @@ class HedgeGridV1(Strategy):
         while self._error_window and self._error_window[0] < one_minute_ago:
             self._error_window.popleft()
 
-        # Check threshold (default 10 errors per minute)
-        max_errors = getattr(self._hedge_grid_config, "max_errors_per_minute", 10) if self._hedge_grid_config else 10
+        # Check threshold from nested config
+        max_errors = rm_cfg.max_errors_per_minute if rm_cfg else 10
 
         if len(self._error_window) >= max_errors:
             self.log.critical(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
@@ -2296,12 +2552,8 @@ class HedgeGridV1(Strategy):
             for order in self.cache.orders_open(instrument_id=self.instrument_id):
                 self.cancel_order(order)
 
-            # Set reset time (5 minutes from now)
-            cooldown_seconds = (
-                getattr(self._hedge_grid_config, "circuit_breaker_cooldown_seconds", 300)
-                if self._hedge_grid_config
-                else 300
-            )
+            # Set reset time from nested config
+            cooldown_seconds = rm_cfg.circuit_breaker_cooldown_seconds if rm_cfg else 300
             self._circuit_breaker_reset_time = now + (cooldown_seconds * 1_000_000_000)
 
             self.log.info(f"Circuit breaker will reset in {cooldown_seconds} seconds")
@@ -2313,6 +2565,11 @@ class HedgeGridV1(Strategy):
         Monitors account balance and halts trading if drawdown
         exceeds configured threshold.
         """
+        # Check if drawdown protection is enabled
+        rm_cfg = self._hedge_grid_config.risk_management if self._hedge_grid_config else None
+        if rm_cfg and not rm_cfg.enable_drawdown_protection:
+            return
+
         try:
             account = self.portfolio.account(self._venue)
             if not account:
@@ -2337,10 +2594,8 @@ class HedgeGridV1(Strategy):
             if self._peak_balance > 0:
                 drawdown_pct = ((self._peak_balance - current_balance) / self._peak_balance) * 100
 
-                # Check against limit (default 20%)
-                max_drawdown_pct = (
-                    getattr(self._hedge_grid_config, "max_drawdown_pct", 20.0) if self._hedge_grid_config else 20.0
-                )
+                # Check against limit from nested config
+                max_drawdown_pct = rm_cfg.max_drawdown_pct if rm_cfg else 20.0
 
                 if drawdown_pct > max_drawdown_pct and not self._drawdown_protection_triggered:
                     self.log.critical(

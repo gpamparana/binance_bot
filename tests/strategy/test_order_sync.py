@@ -770,7 +770,7 @@ def test_diff_large_live_small_desired() -> None:
     # Large live set
     live = [
         LiveOrder(
-            client_order_id=f"HG1-LONG-{i:02d}-{i*1111}",
+            client_order_id=f"HG1-LONG-{i:02d}-{i * 1111}",
             side=Side.LONG,
             price=100.0 - i,
             qty=0.5,
