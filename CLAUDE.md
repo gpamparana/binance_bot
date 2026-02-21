@@ -57,10 +57,10 @@ python -m naut_hedgegrid backtest \
     --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
     --strategy-config configs/strategies/hedge_grid_v1.yaml
 
-# Start paper trading (simulated execution)
+# Start paper trading (simulated execution, defaults to testnet)
 python -m naut_hedgegrid paper \
     --strategy-config configs/strategies/hedge_grid_v1.yaml \
-    --venue-config configs/venues/binance_futures.yaml
+    --venue-config configs/venues/binance_futures_testnet.yaml
 
 # Start paper trading with operational controls
 python -m naut_hedgegrid paper \
@@ -169,6 +169,7 @@ Reusable, composable strategy building blocks with pure functional interfaces:
 - **FundingGuard** (`funding_guard.py`): Reduces exposure near funding
   - Tracks funding rate costs over time window
   - Adjusts ladder quantities when costs exceed threshold
+  - Fed live funding data via `on_data()` handler (subscribes to `BinanceFuturesMarkPriceUpdate`)
   - Stateful (tracks funding history)
 
 - **OrderDiff** (`order_sync.py`): Minimizes order churn
@@ -200,7 +201,8 @@ Core types and value objects:
 Pydantic v2 models with YAML loading:
 
 - **HedgeGridConfig** (`strategy.py`): Main strategy configuration
-  - Contains: grid, exit, rebalance, execution, funding, regime, position, policy
+  - Contains: grid, exit, rebalance, execution, funding, regime, position, policy, risk_management
+  - **Important**: Risk values are nested under `position.*` and `risk_management.*` (e.g., `cfg.position.max_position_pct`, `cfg.risk_management.max_drawdown_pct`). Do NOT use `getattr()` on the root config object for these.
   - Loaded via `HedgeGridConfigLoader.load(path)`
 
 - **BacktestConfig** (`backtest.py`): Backtest run configuration
@@ -498,6 +500,11 @@ The HedgeGridV1 strategy orchestrates components in this **exact order** each ba
 
 ```python
 def on_bar(self, bar: Bar):
+    # 0. Risk controls gate (early exit if unsafe)
+    self._check_drawdown_limit()
+    if self._pause_trading or self._circuit_breaker_active:
+        return  # Do not trade when risk limits breached
+
     # 1. Calculate mid price
     mid = float(bar.close)
 
@@ -518,17 +525,43 @@ def on_bar(self, bar: Bar):
     # 6. Apply funding guard (reduce near funding)
     ladders = self._funding_guard.adjust_ladders(ladders, now)
 
-    # 7. Apply precision guard (enforce exchange rules)
+    # 7. Apply throttle (scale quantities by operational throttle factor)
+    if self._throttle < 1.0:
+        ladders = [self._apply_throttle(ladder) for ladder in ladders]
+
+    # 8. Apply precision guard (enforce exchange rules)
     # Note: Precision guard is applied inside OrderDiff
 
-    # 8. Generate diff vs live orders
+    # 9. Generate diff vs live orders
     diff_result = self._order_diff.diff(ladders, live_orders)
 
-    # 9. Execute diff operations
+    # 10. Execute diff operations
     self._execute_diff(diff_result)  # cancels → replaces → adds
 ```
 
-**This order is critical**: Each step builds on the previous. Regime detection must happen before policy shaping. Funding adjustments must happen before diffing.
+**This order is critical**: Risk checks must run first to gate trading. Regime detection must happen before policy shaping. Funding adjustments and throttle must happen before diffing.
+
+## Runtime Risk Controls
+
+The strategy has three active risk enforcement mechanisms, all wired into the trading hot path:
+
+1. **Drawdown Protection** (`_check_drawdown_limit`): Called at the start of every `on_bar()`. Tracks peak balance and pauses trading if unrealized drawdown exceeds `risk_management.max_drawdown_pct`. Controlled by `risk_management.enable_drawdown_protection`.
+
+2. **Circuit Breaker** (`_check_circuit_breaker`): Triggered from `on_order_rejected()` and `on_order_denied()`. Tracks error rate per minute and activates cooldown if errors exceed `risk_management.max_errors_per_minute`. Cooldown duration set by `risk_management.circuit_breaker_cooldown_seconds`. Controlled by `risk_management.enable_circuit_breaker`.
+
+3. **Position Size Validation** (`_validate_order_size`): Called in `_execute_add()` before every `submit_order()`. Rejects orders that would push position beyond `position.max_position_pct` of account balance. Controlled by `risk_management.enable_position_validation`.
+
+**Config access pattern** (correct):
+```python
+# Nested access via Pydantic model
+max_dd = self._hedge_grid_config.risk_management.max_drawdown_pct
+max_pos = self._hedge_grid_config.position.max_position_pct
+
+# WRONG - do not use getattr on root:
+# getattr(self._hedge_grid_config, "max_drawdown_pct", 20.0)  # BUG: always returns default
+```
+
+**Startup Reconciliation**: On `on_start()`, `_hydrate_grid_orders_cache()` queries existing open orders from the exchange cache and populates `_grid_orders_cache` to prevent duplicate ladder placements after restarts.
 
 ## Hedge Mode and Position Management
 
@@ -615,8 +648,9 @@ uv run pytest tests/ --cov=naut_hedgegrid --cov-report=html
 ```
 
 **Test Coverage:**
-- 248+ core component tests passing
-- 72 operational controls tests
+- 645 tests collected, 608 passing, 37 skipped
+- Core component tests (grid, policy, detector, funding guard, order sync)
+- Operational controls tests (kill switch, alerts, prometheus)
 - Data pipeline tests
 - Strategy integration tests
 
@@ -664,7 +698,7 @@ python -m naut_hedgegrid flatten --side LONG
 
 ### Kill Switch
 
-Automated circuit breakers that monitor:
+Automatically instantiated by `OperationsManager.start()` when `--enable-ops` is passed. Monitors:
 - Max drawdown (unrealized)
 - Max drawdown (realized)
 - Position size limits (LONG/SHORT inventory)
@@ -946,11 +980,13 @@ This script:
 
 **Strategy Lifecycle:**
 - `__init__()`: Initialize state variables
-- `on_start()`: Load config, initialize components, subscribe to data
-- `on_bar()`: Main trading logic
-- `on_order_filled()`: Attach TP/SL
+- `on_start()`: Load config, initialize components, subscribe to data, hydrate grid orders cache
+- `on_bar()`: Risk checks (drawdown/circuit breaker) → main trading logic
+- `on_data()`: Process funding rate updates from `BinanceFuturesMarkPriceUpdate`
+- `on_order_filled()`: Attach TP/SL, track realized PnL
 - `on_order_accepted()`: Track live orders
 - `on_order_canceled()`: Remove from tracking
+- `on_order_rejected()` / `on_order_denied()`: Error tracking → circuit breaker evaluation
 - `on_stop()`: Cancel all orders, log final state
 
 **Data Subscriptions:**
@@ -958,9 +994,19 @@ This script:
 # Subscribe to bars in on_start()
 self.subscribe_bars(self.bar_type)
 
-# Data arrives in on_bar()
+# Subscribe to mark price / funding rate updates (live/paper only)
+from nautilus_trader.adapters.binance.futures.types import BinanceFuturesMarkPriceUpdate
+mark_price_type = DataType(BinanceFuturesMarkPriceUpdate, metadata={"instrument_id": self.instrument_id})
+self.subscribe_data(mark_price_type)
+
+# Bar data arrives in on_bar()
 def on_bar(self, bar: Bar):
     # bar.open, bar.high, bar.low, bar.close, bar.volume
+    ...
+
+# Funding rate data arrives in on_data()
+def on_data(self, data):
+    # Updates self._last_funding_rate and feeds FundingGuard
     ...
 ```
 

@@ -7,7 +7,7 @@
 [![uv](https://img.shields.io/badge/uv-package%20manager-purple.svg)](https://github.com/astral-sh/uv)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](docker/README.md)
 
-A production-ready algorithmic trading system implementing hedge-mode grid strategies for perpetual futures. Built on the NautilusTrader event-driven framework with comprehensive testing, monitoring, and operational tooling.
+An algorithmic trading system implementing hedge-mode grid strategies for perpetual futures. Built on the NautilusTrader event-driven framework with active runtime risk controls, live funding integration, comprehensive testing, monitoring, and operational tooling.
 
 ## Table of Contents
 
@@ -83,6 +83,12 @@ For interactive tutorial, see [examples/quick_backtest.ipynb](examples/quick_bac
                              │
                              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
+│                     Risk Controls Gate                                │
+│        (drawdown limit, circuit breaker, position validation)        │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ (pass)
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
 │                     Component Orchestration                          │
 │                       (on_bar execution)                             │
 └──────────────────────────────────────────────────────────────────────┘
@@ -123,17 +129,21 @@ For interactive tutorial, see [examples/quick_backtest.ipynb](examples/quick_bac
 
 ### Component Flow
 
-**1. Regime Detection** → Determines market state (trending/ranging) using volatility, volume, or price patterns.
+**0. Risk Controls Gate** → Checks drawdown limits and circuit breaker status. Halts trading if thresholds are breached. Position size validated before every order submission.
+
+**1. Regime Detection** → Determines market state (trending/ranging) using EMA crossovers, ADX trend strength, ATR volatility.
 
 **2. Grid Engine** → Computes ladder of entry prices based on regime and configuration.
 
-**3. Placement Policy** → Decides position sizing for each rung using Kelly Criterion or fixed allocation.
+**3. Placement Policy** → Shapes ladder quantities per regime (throttles counter-trend side).
 
-**4. Funding Guard** → Adjusts orders to avoid unfavorable funding rate exposure.
+**4. Funding Guard** → Adjusts orders based on live funding rate data (received via `BinanceFuturesMarkPriceUpdate` subscription).
 
-**5. Order Diff** → Compares desired vs actual orders, generates minimal modification set.
+**5. Throttle** → Scales ladder quantities by operational throttle factor (controllable via API).
 
-**6. Execution** → Submits new orders, cancels stale ones, attaches TP/SL on fills.
+**6. Order Diff** → Compares desired vs actual orders, generates minimal modification set.
+
+**7. Execution** → Submits new orders, cancels stale ones, attaches TP/SL on fills.
 
 ### Hedge Mode
 
@@ -172,13 +182,19 @@ This system uses **OmsType.HEDGING**, allowing simultaneous LONG and SHORT posit
 - Restrict API keys to trading-only permissions (no withdrawal)
 - Rotate keys regularly
 
-**5. SYSTEM FAILURES**
+**5. RISK CONTROLS**
+- Drawdown protection, circuit breaker, and position size validation are active in the trading loop
+- Configure thresholds in `risk_management` section of strategy config
+- Kill switch is auto-started by OperationsManager when `--enable-ops` is passed
+- Always verify risk controls trigger correctly before live deployment
+
+**6. SYSTEM FAILURES**
 - Network outages can prevent order cancellation
 - Use exchange-side stop-losses as backup
-- Implement position flattening on exceptions
+- Grid orders cache is hydrated from exchange on restart to prevent duplicates
 - Test failover scenarios
 
-**6. BACKTEST LIMITATIONS**
+**7. BACKTEST LIMITATIONS**
 - Historical performance ≠ future results
 - Slippage and fees may differ from backtest
 - Market conditions change continuously
@@ -192,8 +208,11 @@ Before running live trading, complete ALL items:
 - [ ] Ran paper trading for ≥1 week without errors
 - [ ] Verified hedge mode enabled on exchange account
 - [ ] Tested position flattening commands
+- [ ] Verified circuit breaker and drawdown protection trigger correctly under synthetic fault/load
+- [ ] Verified restart with open orders doesn't create duplicate ladder placements
+- [ ] Verified funding guard activates with real funding feed
 - [ ] Configured Prometheus alerting for PnL/position thresholds
-- [ ] Set up kill switch integration (see examples/)
+- [ ] Confirmed kill switch starts via OperationsManager (`--enable-ops`)
 - [ ] Documented emergency procedures
 - [ ] Tested with minimum position size
 - [ ] Verified API rate limits won't be exceeded
@@ -270,12 +289,12 @@ uv run python -m naut_hedgegrid backtest \
 
 ### 2. Paper Trading
 
-Simulated execution with live market data (no real orders):
+Simulated execution with live market data (no real orders). Defaults to testnet:
 
 ```bash
 uv run python -m naut_hedgegrid paper \
   --strategy-config configs/strategies/hedge_grid_v1.yaml \
-  --venue-config configs/venues/binance_futures.yaml \
+  --venue-config configs/venues/binance_futures_testnet.yaml \
   --enable-ops \
   --prometheus-port 9090 \
   --api-port 8080
@@ -362,6 +381,7 @@ naut-hedgegrid/
 │   │   ├── run_paper.py         # PaperRunner (Nautilus sandbox)
 │   │   └── run_live.py          # LiveRunner (REAL MONEY)
 │   ├── ops/                     # Operational monitoring and control
+│   │   ├── manager.py           # OperationsManager (wires Prometheus, API, KillSwitch)
 │   │   ├── prometheus.py        # Prometheus metrics exporter
 │   │   ├── alerts.py            # Alert system (Telegram, email, webhook)
 │   │   └── kill_switch.py       # Emergency position flattening
@@ -391,7 +411,7 @@ naut-hedgegrid/
 │   ├── backtest/                # Backtest configs (time ranges, data sources)
 │   ├── strategies/              # Strategy configs (grid params, risk settings)
 │   └── venues/                  # Venue configs (Binance, more coming)
-├── tests/                       # Test suite (377 tests collected)
+├── tests/                       # Test suite (645 tests collected)
 │   ├── strategy/                # Strategy component tests
 │   │   ├── test_grid.py         # GridEngine tests
 │   │   ├── test_policy.py       # PlacementPolicy tests
@@ -462,13 +482,12 @@ make all
 
 ### Testing Philosophy
 
-- **377 tests collected** (as of 2024-10-22)
+- **645 tests collected, 608 passing, 37 skipped** (as of 2026-02-20)
 - **Unit tests**: Pure functions (grid, policy, detector) tested in isolation
 - **Component tests**: Strategy components (funding_guard, order_sync)
 - **Integration tests**: Multi-component orchestration
 - **Parity tests**: Backtest vs paper trading consistency
 - **Property-based tests**: Hypothesis for edge case discovery
-- **Known issues**: Some BarType parsing errors in smoke tests (non-critical)
 
 ### Code Conventions
 
@@ -586,31 +605,32 @@ See [docker/README.md](docker/README.md) for comprehensive deployment guide (550
 # configs/strategies/hedge_grid_v1.yaml
 strategy:
   class_name: "HedgeGridV1"
-  params:
-    # Grid parameters
-    grid_step_bps: 50          # 50 bps between rungs
-    grid_levels: 10            # 10 rungs per side
-    base_qty: 0.01             # Base quantity (BTC)
+  instrument_id: BTCUSDT-PERP.BINANCE
 
-    # Exit parameters
-    tp_steps: 2                # Take profit after 2 steps
-    sl_steps: 5                # Stop loss after 5 steps
+grid:
+  grid_step_bps: 50          # 50 bps between rungs
+  grid_levels_long: 10       # 10 rungs below mid
+  grid_levels_short: 10      # 10 rungs above mid
+  base_qty: 0.01             # Base quantity (BTC)
+  qty_scale: 1.1             # Geometric growth factor
 
-    # Regime detection
-    regime_detector:
-      window: 100              # 100-bar lookback
-      vol_threshold: 0.02      # 2% volatility threshold
+exit:
+  tp_steps: 2                # Take profit after 2 grid steps
+  sl_steps: 5                # Stop loss after 5 grid steps
 
-    # Funding guard
-    funding_threshold: 0.01    # 1% funding rate threshold
+position:
+  max_position_pct: 0.3      # Max 30% of capital per side
 
-    # Position sizing
-    sizing_method: "kelly"     # Kelly Criterion
-    max_position_pct: 0.3      # Max 30% of capital per side
+risk_management:
+  enable_circuit_breaker: true
+  max_errors_per_minute: 10
+  circuit_breaker_cooldown_seconds: 300
+  enable_drawdown_protection: true
+  max_drawdown_pct: 10.0     # Pause trading at 10% drawdown
+  enable_position_validation: true
 
-# Risk management
-oms_type: HEDGING              # Hedge mode (CRITICAL!)
-max_position_size: 1.0         # Max 1.0 BTC per side
+# OMS type (CRITICAL - must be HEDGING for hedge mode)
+oms_type: HEDGING
 ```
 
 ## License
