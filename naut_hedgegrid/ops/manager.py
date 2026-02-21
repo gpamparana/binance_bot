@@ -46,12 +46,14 @@ class OperationsManager:
         prometheus_port: int = 9090,
         api_port: int = 8080,
         api_key: str | None = None,
+        ops_config: Any | None = None,
     ) -> None:
         self.strategy = strategy
         self.instrument_id = instrument_id
         self.prometheus_port = prometheus_port
         self.api_port = api_port
         self.api_key = api_key
+        self._ops_config = ops_config  # OperationsConfig or None
         self.is_running = False
 
         self._prometheus: PrometheusExporter | None = None
@@ -79,7 +81,7 @@ class OperationsManager:
                 strategy_callback=self._strategy_callback,
                 api_key=self.api_key,
             )
-            self._api.start_server(host="0.0.0.0", port=self.api_port)
+            self._api.start_server(host="127.0.0.1", port=self.api_port)
             logger.info(f"FastAPI control endpoints started on port {self.api_port}")
         except Exception as e:
             logger.warning(f"FastAPI failed to start: {e}. Continuing without API.")
@@ -97,10 +99,22 @@ class OperationsManager:
 
         # 4. Start KillSwitch monitoring
         try:
-            from naut_hedgegrid.config.operations import KillSwitchConfig
+            from naut_hedgegrid.config.operations import KillSwitchConfig, OperationsConfig
             from naut_hedgegrid.ops.kill_switch import KillSwitch
 
-            kill_switch_config = KillSwitchConfig()
+            # Use ops config if provided, otherwise fall back to defaults
+            if self._ops_config is not None and isinstance(self._ops_config, OperationsConfig):
+                kill_switch_config = self._ops_config.kill_switch
+            else:
+                kill_switch_config = KillSwitchConfig()
+                logger.warning("No ops config provided — using default KillSwitch thresholds")
+
+            logger.info(
+                f"KillSwitch thresholds: max_drawdown={kill_switch_config.max_drawdown_pct}%, "
+                f"max_loss={kill_switch_config.max_loss_amount_usdt} USDT, "
+                f"max_margin={kill_switch_config.max_margin_ratio:.0%}"
+            )
+
             self._kill_switch = KillSwitch(
                 strategy=self.strategy,
                 config=kill_switch_config,
@@ -235,46 +249,21 @@ class OperationsManager:
                 return {"success": True, "throttle": throttle}
 
             if operation == "get_ladders":
-                long_ladder: list[dict[str, Any]] = []
-                short_ladder: list[dict[str, Any]] = []
-                mid_price = self.strategy._grid_center  # noqa: SLF001
-
-                with self.strategy._ladder_lock:  # noqa: SLF001
-                    if self.strategy._last_long_ladder:  # noqa: SLF001
-                        long_ladder = [
-                            {"price": r.price, "qty": r.qty, "rung": i}
-                            for i, r in enumerate(
-                                self.strategy._last_long_ladder.rungs  # noqa: SLF001
-                            )
-                        ]
-                    if self.strategy._last_short_ladder:  # noqa: SLF001
-                        short_ladder = [
-                            {"price": r.price, "qty": r.qty, "rung": i}
-                            for i, r in enumerate(
-                                self.strategy._last_short_ladder.rungs  # noqa: SLF001
-                            )
-                        ]
-
+                snapshot = self.strategy.get_ladders_snapshot()
                 return {
-                    "mid_price": mid_price,
-                    "long_ladder": long_ladder,
-                    "short_ladder": short_ladder,
+                    "mid_price": snapshot.get("mid_price", 0.0),
+                    "long_ladder": [
+                        {"price": r["price"], "qty": r["qty"], "rung": i}
+                        for i, r in enumerate(snapshot.get("long_ladder", []))
+                    ],
+                    "short_ladder": [
+                        {"price": r["price"], "qty": r["qty"], "rung": i}
+                        for i, r in enumerate(snapshot.get("short_ladder", []))
+                    ],
                 }
 
             if operation == "get_orders":
-                orders = self.strategy._get_live_grid_orders()  # noqa: SLF001
-                return {
-                    "orders": [
-                        {
-                            "client_order_id": str(o.client_order_id),
-                            "side": o.side.value,
-                            "price": o.price,
-                            "quantity": o.qty,
-                            "status": o.status,
-                        }
-                        for o in orders
-                    ]
-                }
+                return {"orders": self.strategy.get_orders_snapshot()}
 
             return {"error": f"Unknown operation: {operation}"}
 

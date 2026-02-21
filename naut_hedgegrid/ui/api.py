@@ -20,13 +20,15 @@ import concurrent.futures
 import logging
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -143,6 +145,32 @@ class OrdersResponse(BaseModel):
     timestamp: float = Field(..., description="Response timestamp")
 
 
+# Rate Limiter
+
+
+class RateLimiter:
+    """Simple in-memory sliding window rate limiter."""
+
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+        self._requests: dict[str, list[float]] = defaultdict(list)
+
+    def is_allowed(self, client_ip: str) -> bool:
+        """Check if request is allowed under rate limit."""
+        now = time.time()
+        cutoff = now - self._window_seconds
+
+        # Clean old entries and add current
+        self._requests[client_ip] = [t for t in self._requests[client_ip] if t > cutoff]
+
+        if len(self._requests[client_ip]) >= self._max_requests:
+            return False
+
+        self._requests[client_ip].append(now)
+        return True
+
+
 # FastAPI Application
 
 
@@ -180,6 +208,8 @@ class StrategyAPI:
         self,
         strategy_callback: Callable[[str, dict[str, Any]], dict[str, Any]],
         api_key: str | None = None,
+        require_auth: bool = True,
+        cors_origins: list[str] | None = None,
     ) -> None:
         """Initialize FastAPI application with strategy callback.
 
@@ -187,9 +217,13 @@ class StrategyAPI:
             strategy_callback: Callable that handles strategy operations
                 Should accept (operation: str, **kwargs) and return dict
             api_key: Optional API key for authentication (header: X-API-Key)
+            require_auth: If True, mutating endpoints require API key even if
+                api_key is not set (returns 403). Defaults to True for safety.
+            cors_origins: Allowed CORS origins. Defaults to localhost only.
         """
         self._raw_strategy_callback = strategy_callback
         self.api_key = api_key
+        self._require_auth = require_auth
         self.is_running = False
         self.server_thread: threading.Thread | None = None
         self.start_time = time.time()
@@ -199,6 +233,10 @@ class StrategyAPI:
             max_workers=2, thread_name_prefix="api-callback"
         )
 
+        # Rate limiters: POST (mutating) and GET (monitoring)
+        self._write_limiter = RateLimiter(max_requests=10, window_seconds=60)
+        self._read_limiter = RateLimiter(max_requests=60, window_seconds=60)
+
         # Create FastAPI app
         self.app = FastAPI(
             title="HedgeGrid Trading API",
@@ -206,14 +244,35 @@ class StrategyAPI:
             version="1.0.0",
         )
 
-        # Add CORS middleware for browser access
+        # Add CORS middleware with restricted origins
+        allowed_origins = cors_origins or [
+            "http://127.0.0.1:8080",
+            "http://localhost:8080",
+        ]
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # Configure appropriately for production
+            allow_origins=allowed_origins,
             allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_methods=["GET", "POST"],
+            allow_headers=["X-API-Key", "Content-Type"],
         )
+
+        # Add rate limiting middleware
+        @self.app.middleware("http")
+        async def rate_limit_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+            client_ip = request.client.host if request.client else "unknown"
+            if request.method == "POST":
+                if not self._write_limiter.is_allowed(client_ip):
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "Rate limit exceeded for mutating endpoints"},
+                    )
+            elif not self._read_limiter.is_allowed(client_ip):
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Rate limit exceeded"},
+                )
+            return await call_next(request)
 
         # Register routes
         self._register_routes()
@@ -246,17 +305,42 @@ class StrategyAPI:
                 detail=f"Strategy callback '{operation}' timed out",
             ) from None
 
-    def _validate_api_key(self, x_api_key: str | None = Header(None)) -> None:
-        """Validate API key if authentication is enabled.
+    def _validate_read_auth(self, x_api_key: str | None = Header(None)) -> None:
+        """Validate API key for read (GET) endpoints.
+
+        Only validates if an API key is configured. Read endpoints remain
+        accessible for monitoring when no key is set.
 
         Args:
             x_api_key: API key from X-API-Key header
-
-        Raises:
-            HTTPException: If API key is required but missing or invalid
         """
         if not self.api_key:
-            return  # Authentication disabled (no key configured)
+            return  # No key configured — reads are open for monitoring
+
+        if x_api_key is None or x_api_key != self.api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing API key",
+                headers={"WWW-Authenticate": "X-API-Key"},
+            )
+
+    def _validate_write_auth(self, x_api_key: str | None = Header(None)) -> None:
+        """Validate API key for write (POST) endpoints.
+
+        Mutating endpoints ALWAYS require authentication when require_auth
+        is True (default). This prevents accidental unauthenticated access
+        to flatten, throttle, start, and stop operations.
+
+        Args:
+            x_api_key: API key from X-API-Key header
+        """
+        if not self.api_key:
+            if self._require_auth:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API key must be configured for mutating endpoints. Set api_key in operations config.",
+                )
+            return  # Auth not required (e.g., paper trading)
 
         if x_api_key is None or x_api_key != self.api_key:
             raise HTTPException(
@@ -299,7 +383,7 @@ class StrategyAPI:
             Returns detailed information about strategy state, positions, PnL,
             and open orders. Requires authentication if API key is configured.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_read_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("get_status", {})
@@ -323,7 +407,7 @@ class StrategyAPI:
             Enables strategy to place new orders and manage positions.
             This is a safe operation that does not affect existing positions.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_write_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("start", {})
@@ -344,7 +428,7 @@ class StrategyAPI:
             Cancels all open orders but keeps existing positions open.
             This is useful for pausing trading without closing positions.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_write_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("stop", {})
@@ -368,7 +452,7 @@ class StrategyAPI:
 
             Use with caution - this will immediately close positions at market price.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_write_auth(x_api_key)
 
             if request.side not in ("long", "short", "both"):
                 raise HTTPException(status_code=400, detail="Invalid side. Must be 'long', 'short', or 'both'")
@@ -396,7 +480,7 @@ class StrategyAPI:
 
             This allows dynamic adjustment of strategy behavior without restart.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_write_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("set_throttle", {"throttle": request.throttle})
@@ -417,7 +501,7 @@ class StrategyAPI:
             Returns the current state of the grid ladders including all rungs
             with their prices and quantities. Useful for visualizing grid state.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_read_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("get_ladders", {})
@@ -439,7 +523,7 @@ class StrategyAPI:
             Returns all open orders for the strategy including grid orders
             and any take-profit/stop-loss orders.
             """
-            self._validate_api_key(x_api_key)
+            self._validate_read_auth(x_api_key)
 
             try:
                 result = self.strategy_callback("get_orders", {})
@@ -454,7 +538,7 @@ class StrategyAPI:
                 logger.error(f"Orders query failed: {e}")
                 raise HTTPException(status_code=500, detail=f"Failed to get orders: {e}") from e
 
-    def start_server(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+    def start_server(self, host: str = "127.0.0.1", port: int = 8080) -> None:
         """Start FastAPI server in background thread.
 
         Starts a uvicorn server running the FastAPI application in a
@@ -462,7 +546,8 @@ class StrategyAPI:
         is called.
 
         Args:
-            host: Host address to bind (default 0.0.0.0 for all interfaces)
+            host: Host address to bind (default 127.0.0.1 for localhost only).
+                Use "0.0.0.0" explicitly if remote access is needed.
             port: TCP port for API endpoints (default 8080)
 
         Example:

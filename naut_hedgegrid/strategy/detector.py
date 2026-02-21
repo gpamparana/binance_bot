@@ -414,11 +414,14 @@ class RegimeDetector:
     def is_warm(self) -> bool:
         """Check if detector has enough data for reliable regime detection.
 
+        ATR is computed but not currently used in regime classification,
+        so it is excluded from the warmup requirement to reduce startup delay.
+
         Returns:
-            True if all indicators are warmed up
+            True if classification indicators (EMA, ADX) are warmed up
 
         """
-        return self.ema_fast.is_warm and self.ema_slow.is_warm and self.adx.is_warm and self.atr.is_warm
+        return self.ema_fast.is_warm and self.ema_slow.is_warm and self.adx.is_warm
 
     def reset(self) -> None:
         """Reset all indicators and regime state."""

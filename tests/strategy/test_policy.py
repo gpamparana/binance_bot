@@ -315,7 +315,7 @@ def test_prices_and_tpsl_preserved_after_throttling() -> None:
 
 
 def test_core_and_scalp_strategy_behavior() -> None:
-    """Test core-and-scalp strategy maintains thin ladders on both sides."""
+    """Test core-and-scalp thins BOTH sides to counter_levels (narrow band)."""
     cfg = create_test_config(policy_strategy="core-and-scalp", counter_levels=2)
     mid = 100.0
 
@@ -326,9 +326,9 @@ def test_core_and_scalp_strategy_behavior() -> None:
     long_up = next(ladder for ladder in shaped_up if ladder.side == Side.LONG)
     short_up = next(ladder for ladder in shaped_up if ladder.side == Side.SHORT)
 
-    # Both sides should maintain presence (thin counter-trend)
-    assert len(long_up) == 5  # Full with-trend
-    assert len(short_up) == 2  # Throttled counter-trend
+    # Core-and-scalp thins BOTH sides to counter_levels (narrow market-making band)
+    assert len(long_up) == 2  # Trend side also thinned to counter_levels
+    assert len(short_up) == 2  # Counter-trend throttled
 
     # Test DOWN regime: LONG is counter-trend
     original_down = GridEngine.build_ladders(mid, cfg, Regime.DOWN)
@@ -336,9 +336,9 @@ def test_core_and_scalp_strategy_behavior() -> None:
     long_down = next(ladder for ladder in shaped_down if ladder.side == Side.LONG)
     short_down = next(ladder for ladder in shaped_down if ladder.side == Side.SHORT)
 
-    # Both sides should maintain presence
-    assert len(long_down) == 2  # Throttled counter-trend
-    assert len(short_down) == 5  # Full with-trend
+    # Both sides thinned
+    assert len(long_down) == 2  # Counter-trend throttled
+    assert len(short_down) == 2  # Trend side also thinned to counter_levels
 
 
 def test_throttled_counter_strategy_behavior() -> None:

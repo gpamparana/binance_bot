@@ -11,11 +11,6 @@ Key Features:
     - Rich console output
 """
 
-# Apply testnet patch BEFORE any Nautilus imports to avoid non-ASCII crashes
-from naut_hedgegrid.adapters.binance_testnet_patch import patch_binance_futures_for_testnet
-
-patch_binance_futures_for_testnet()
-
 import signal
 import sys
 import threading
@@ -199,8 +194,12 @@ class BaseRunner(ABC):
         # Extract instrument ID
         instrument_id = hedge_grid_cfg.strategy.instrument_id
 
-        # Determine OMS type from venue config
-        oms_type = OmsType.HEDGING if venue_cfg.trading.hedge_mode else OmsType.NETTING
+        # Determine OMS type from venue config — HedgeGridV1 REQUIRES hedge mode
+        if not venue_cfg.trading.hedge_mode:
+            raise ValueError(
+                "HedgeGridV1 requires hedge_mode=true in venue config. Set trading.hedge_mode: true in your venue YAML."
+            )
+        oms_type = OmsType.HEDGING
 
         # Create ImportableStrategyConfig
         # This is the correct Nautilus 1.220.0 pattern - use ImportableStrategyConfig directly
@@ -435,6 +434,15 @@ class BaseRunner(ABC):
                 strategy_config, venue_config
             )
 
+            # Apply testnet patch only when testnet is enabled
+            if venue_cfg.api.testnet:
+                from naut_hedgegrid.adapters.binance_testnet_patch import (
+                    patch_binance_futures_for_testnet,
+                )
+
+                patch_binance_futures_for_testnet()
+                self.console.print("[green]✓[/green] Applied testnet compatibility patch")
+
             # Extract exchange API keys from venue config (already resolved from env vars)
             exchange_api_key = venue_cfg.api.api_key
             exchange_api_secret = venue_cfg.api.api_secret
@@ -547,6 +555,7 @@ class BaseRunner(ABC):
                             prometheus_port=prometheus_port,
                             api_port=api_port,
                             api_key=api_key,
+                            ops_config=hedge_grid_cfg.operations,
                         )
                         self.ops_manager.start()
                         self.console.print(

@@ -33,27 +33,39 @@ class PlacementPolicy:
 
         Notes:
             - SIDEWAYS regime: Returns ladders unchanged (balanced)
-            - UP regime: Throttles SHORT side (counter-trend, needs reversal for TP)
-            - DOWN regime: Throttles LONG side (counter-trend, needs reversal for TP)
-            - Both strategies use same throttling logic, differ only in intent
+            - UP regime: Throttles SHORT side (counter-trend)
+            - DOWN regime: Throttles LONG side (counter-trend)
+            - "throttled-counter": Full ladder with trend, thin against trend
+            - "core-and-scalp": Thin BOTH sides to counter_levels (narrow band)
 
         """
         # SIDEWAYS: No throttling needed, balanced on both sides
         if regime == Regime.SIDEWAYS:
             return ladders
 
-        # Determine which side is counter-trend based on regime
+        strategy = cfg.policy.strategy
         counter_side = PlacementPolicy._get_counter_side(regime)
 
-        # Apply throttling to counter-trend ladder
+        if strategy == "core-and-scalp":
+            # Thin BOTH sides: keep only counter_levels closest rungs
+            # Counter-trend side also gets qty scaling, trend side keeps full qty
+            shaped = []
+            for ladder in ladders:
+                if ladder.side == counter_side:
+                    shaped.append(PlacementPolicy._throttle_ladder(ladder, cfg))
+                else:
+                    # Trend side: truncate to counter_levels but keep full qty
+                    truncated = list(ladder.rungs[: cfg.policy.counter_levels])
+                    shaped.append(Ladder.from_list(ladder.side, truncated))
+            return shaped
+
+        # Default: "throttled-counter" — throttle only counter-trend side
         shaped = []
         for ladder in ladders:
             if ladder.side == counter_side:
-                # Throttle counter-trend ladder
                 throttled = PlacementPolicy._throttle_ladder(ladder, cfg)
                 shaped.append(throttled)
             else:
-                # Keep trend-following ladder unchanged
                 shaped.append(ladder)
 
         return shaped

@@ -147,9 +147,11 @@ class HedgeGridV1(Strategy):
         self._initial_balance: float | None = None
         self._drawdown_protection_triggered: bool = False
 
-        # Position validation
+        # Position validation & configurable timing (defaults overridden in on_start)
         self._last_balance_check: float = 0.0
-        self._balance_check_interval: int = 60_000_000_000  # 60 seconds in nanoseconds
+        self._balance_check_interval: int = 60_000_000_000
+        self._tp_sl_buffer_mult: float = 0.0005  # 5 bps default
+        self._circuit_breaker_window_ns: int = 60_000_000_000
         self._ladder_lock = threading.Lock()  # Thread safety for ladder snapshots
 
         # Error recovery state
@@ -204,10 +206,31 @@ class HedgeGridV1(Strategy):
             self._hedge_grid_config = HedgeGridConfigLoader.load(self.config_path)
             # Cache optimization mode flag for fast checks
             self._is_optimization_mode = self._hedge_grid_config.execution.optimization_mode
+            # Apply configurable timing constants
+            self._balance_check_interval = (
+                self._hedge_grid_config.execution.balance_check_interval_seconds * 1_000_000_000
+            )
+            self._tp_sl_buffer_mult = self._hedge_grid_config.execution.tp_sl_adjustment_buffer_bps / 10_000
+            rm_cfg = self._hedge_grid_config.risk_management
+            self._circuit_breaker_window_ns = (
+                rm_cfg.circuit_breaker_window_seconds * 1_000_000_000 if rm_cfg else 60_000_000_000
+            )
             if not self._is_optimization_mode:
                 self.log.info(f"Loaded config from {self.config_path}")
         except Exception as e:
             self.log.error(f"Failed to load config from {self.config_path}: {e}")
+            return
+
+        # Defense-in-depth: verify hedge mode is enabled
+        from nautilus_trader.model.enums import OmsType
+
+        if self.config.oms_type != OmsType.HEDGING:
+            self.log.critical(
+                f"HedgeGridV1 requires OmsType.HEDGING but got {self.config.oms_type}. "
+                "Set hedge_mode: true in venue config."
+            )
+            self._critical_error = True
+            self._pause_trading = True
             return
 
         # Get instrument from cache
@@ -711,6 +734,13 @@ class HedgeGridV1(Strategy):
         if self._critical_error or self._pause_trading:
             return
 
+        # RISK GATE: Drawdown check runs UNCONDITIONALLY before anything else
+        # (even during warmup) to catch pre-existing drawdown at startup
+        if self._hedge_grid_config is not None:
+            self._check_drawdown_limit()
+            if self._pause_trading:
+                return
+
         # Check all components are initialized before processing bar
         if (
             self._hedge_grid_config is None
@@ -756,11 +786,6 @@ class HedgeGridV1(Strategy):
         if not self._regime_detector.is_warm:
             if not self._is_optimization_mode:
                 self.log.info("Regime detector not warm yet, skipping trading")
-            return
-
-        # Risk management checks (must run before any order operations)
-        self._check_drawdown_limit()
-        if self._pause_trading:
             return
 
         if self._circuit_breaker_active:
@@ -1012,8 +1037,8 @@ class HedgeGridV1(Strategy):
                             pos = self.cache.position(PositionId(f"{self.instrument_id}-SHORT"))
                             if pos and hasattr(pos, "avg_px_open"):
                                 self._realized_pnl += (float(pos.avg_px_open) - fill_price) * fill_qty
-                except Exception:
-                    pass  # Don't let PnL tracking break order handling
+                except Exception as e:
+                    self.log.warning(f"PnL tracking failed for {client_order_id}: {e}")
 
                 # CRITICAL FIX: Remove fill_key from tracking so the same level
                 # can get new TP/SL orders on future grid fills.
@@ -1765,8 +1790,8 @@ class HedgeGridV1(Strategy):
         # Create limit order (this appends counter to client_order_id)
         order = self._create_limit_order(intent, self._instrument)
 
-        # Validate order size against account balance before submission
-        if not self._validate_order_size(order):
+        # Validate cumulative position exposure before submission
+        if not self._validate_order_size(order, intent.side):
             self.log.warning(f"Order {intent.client_order_id} rejected by position size validation")
             return
 
@@ -1953,29 +1978,29 @@ class HedgeGridV1(Strategy):
         if self._last_mid is not None:
             current_mid = self._last_mid
 
+            buffer = getattr(self, "_tp_sl_buffer_mult", 0.0005)
+
             if order_side == OrderSide.BUY:  # Closing SHORT position
                 # SL should be ABOVE current market to trigger on upward move
                 if sl_price <= current_mid:
-                    adjusted_price = current_mid * 1.0005
+                    adjusted_price = current_mid * (1 + buffer)
                     self.log.warning(
                         f"[SL ADJUST] Stop-loss {sl_price:.2f} at/below market "
-                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (+0.05%)"
+                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (+{buffer:.4%})"
                     )
-                    # Adjust to slightly above current market
-                    sl_price = adjusted_price  # 0.05% buffer
+                    sl_price = adjusted_price
                     if self._precision_guard:
                         sl_price = self._precision_guard.clamp_price(sl_price)
 
             elif order_side == OrderSide.SELL:  # Closing LONG position
                 # SL should be BELOW current market to trigger on downward move
                 if sl_price >= current_mid:
-                    adjusted_price = current_mid * 0.9995
+                    adjusted_price = current_mid * (1 - buffer)
                     self.log.warning(
                         f"[SL ADJUST] Stop-loss {sl_price:.2f} at/above market "
-                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (-0.05%)"
+                        f"{current_mid:.2f}, adjusting to {adjusted_price:.2f} (-{buffer:.4%})"
                     )
-                    # Adjust to slightly below current market
-                    sl_price = adjusted_price  # 0.05% buffer
+                    sl_price = adjusted_price
                     if self._precision_guard:
                         sl_price = self._precision_guard.clamp_price(sl_price)
 
@@ -2232,6 +2257,25 @@ class HedgeGridV1(Strategy):
                 ],
             }
 
+    def get_orders_snapshot(self) -> list[dict]:
+        """
+        Return open grid orders for API consumption.
+
+        Returns:
+            List of order dictionaries with client_order_id, side, price, quantity, status.
+        """
+        orders = self._get_live_grid_orders()
+        return [
+            {
+                "client_order_id": str(o.client_order_id),
+                "side": o.side.value,
+                "price": o.price,
+                "quantity": o.qty,
+                "status": o.status,
+            }
+            for o in orders
+        ]
+
     # =====================================================================
     # HELPER METHODS FOR OPERATIONAL METRICS
     # =====================================================================
@@ -2466,12 +2510,16 @@ class HedgeGridV1(Strategy):
         # Log state for debugging
         self.log.critical("Critical error handler complete. Trading paused. Manual intervention required.")
 
-    def _validate_order_size(self, order) -> bool:
+    def _validate_order_size(self, order, side: Side) -> bool:
         """
-        Validate order size against account balance.
+        Validate cumulative position exposure against account balance.
+
+        Checks that (existing_position + pending_grid_orders + new_order) notional
+        does not exceed max_position_pct of total balance for the given side.
 
         Args:
             order: Order to validate
+            side: Position side (LONG or SHORT)
 
         Returns:
             True if order size is valid, False otherwise
@@ -2487,30 +2535,51 @@ class HedgeGridV1(Strategy):
                 self.log.error("No account found for position validation")
                 return False
 
-            # Calculate notional value
-            notional = float(order.quantity) * float(order.price) if hasattr(order, "price") else 0
-
-            # Get free balance (assuming USDT as base currency)
+            # Get total balance
             from nautilus_trader.model.identifiers import Currency
 
             base_currency = Currency.from_str("USDT")
-            free_balance = float(account.balance_free(base_currency))
+            total_balance = float(account.balance_total(base_currency))
+            if total_balance <= 0:
+                self.log.error("Total balance is zero or negative, rejecting order")
+                return False
 
-            # Apply maximum position percentage from nested config
+            # 1. Existing position exposure for this side
+            position_id = PositionId(f"{self.instrument_id}-{side.value}")
+            position = self.cache.position(position_id)
+            existing_exposure = 0.0
+            if position and position.quantity > 0:
+                existing_exposure = float(position.quantity) * float(position.avg_px_open)
+
+            # 2. Pending (open but unfilled) grid orders on this side
+            pending_notional = 0.0
+            with self._grid_orders_lock:
+                for lo in self._grid_orders_cache.values():
+                    if lo.side == side:
+                        pending_notional += lo.price * lo.qty
+
+            # 3. New order notional
+            new_notional = float(order.quantity) * float(order.price) if hasattr(order, "price") else 0.0
+
+            # Check cumulative exposure against limit
             max_position_pct = self._hedge_grid_config.position.max_position_pct if self._hedge_grid_config else 0.95
+            max_allowed = total_balance * max_position_pct
+            combined = existing_exposure + pending_notional + new_notional
 
-            if notional > free_balance * max_position_pct:
+            if combined > max_allowed:
                 self.log.warning(
-                    f"Order notional {notional:.2f} exceeds limit "
-                    f"({free_balance:.2f} * {max_position_pct:.2%} = {free_balance * max_position_pct:.2f})"
+                    f"Position limit breach on {side.value}: "
+                    f"existing={existing_exposure:.2f} + pending={pending_notional:.2f} + "
+                    f"new={new_notional:.2f} = {combined:.2f} > "
+                    f"limit={max_allowed:.2f} ({max_position_pct:.0%} of {total_balance:.2f})"
                 )
                 return False
 
             return True
 
         except Exception as e:
-            self.log.error(f"Error validating order size: {e}")
-            return False  # Fail safe - reject if we can't validate
+            self.log.error(f"Position validation error (order rejected as fail-safe): {e}")
+            return False
 
     def _check_circuit_breaker(self) -> None:
         """
@@ -2536,9 +2605,9 @@ class HedgeGridV1(Strategy):
         now = self.clock.timestamp_ns()
         self._error_window.append(now)
 
-        # Remove old errors outside 1-minute window
-        one_minute_ago = now - 60_000_000_000  # 60 seconds in nanoseconds
-        while self._error_window and self._error_window[0] < one_minute_ago:
+        # Remove old errors outside circuit breaker window
+        window_start = now - self._circuit_breaker_window_ns
+        while self._error_window and self._error_window[0] < window_start:
             self._error_window.popleft()
 
         # Check threshold from nested config
@@ -2611,7 +2680,8 @@ class HedgeGridV1(Strategy):
                     self._pause_trading = True
 
         except Exception as e:
-            self.log.error(f"Error checking drawdown limit: {e}")
+            self.log.critical(f"Drawdown check FAILED - pausing trading as safety precaution: {e}")
+            self._pause_trading = True
 
     def _flatten_all_positions(self) -> None:
         """

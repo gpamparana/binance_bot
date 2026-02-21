@@ -290,9 +290,8 @@ def validate_dataframe_schema(df: pd.DataFrame, schema_type: str) -> None:
     if missing:
         raise ValueError(f"Missing required columns for {schema_type}: {missing}")
 
-    # Validate each row (sample first 10 for performance)
-    sample = df.head(min(10, len(df)))
-    for idx, row in sample.iterrows():
+    # Validate all rows (full validation for data integrity)
+    for idx, row in df.iterrows():
         try:
             schema_cls(**row.to_dict())
         except Exception as e:

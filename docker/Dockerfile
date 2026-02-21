@@ -44,7 +44,7 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app/src:$PYTHONPATH"
+    PYTHONPATH="/app:$PYTHONPATH"
 
 # Install system dependencies (currently none required)
 # Uncomment if TA-Lib or other system libs are needed in the future:
@@ -65,7 +65,8 @@ WORKDIR /app
 COPY --from=builder --chown=nautilus:nautilus /app/.venv /app/.venv
 
 # Copy application code
-COPY --chown=nautilus:nautilus src/ /app/src/
+COPY --chown=nautilus:nautilus naut_hedgegrid/ /app/naut_hedgegrid/
+COPY --chown=nautilus:nautilus pyproject.toml /app/
 COPY --chown=nautilus:nautilus configs/ /app/configs/
 
 # Create directories for mounted volumes

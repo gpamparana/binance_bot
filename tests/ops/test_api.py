@@ -85,8 +85,8 @@ class TestStrategyAPI:
 
     @pytest.fixture
     def api(self, mock_callback):
-        """Create StrategyAPI instance with mock callback."""
-        return StrategyAPI(strategy_callback=mock_callback)
+        """Create StrategyAPI instance with mock callback (auth disabled for unit tests)."""
+        return StrategyAPI(strategy_callback=mock_callback, require_auth=False)
 
     @pytest.fixture
     def client(self, api):

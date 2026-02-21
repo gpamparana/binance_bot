@@ -6,9 +6,17 @@ which cause Nautilus to crash when parsing symbols. This patch filters out non-A
 symbols before they reach Nautilus's Rust code.
 """
 
+_state = {"patched": False}
+
 
 def patch_binance_futures_for_testnet():
-    """Patch BinanceFuturesAccountHttpAPI to filter non-ASCII symbols."""
+    """Patch BinanceFuturesAccountHttpAPI to filter non-ASCII symbols.
+
+    Idempotent: safe to call multiple times.
+    """
+    if _state["patched"]:
+        return True
+
     from nautilus_trader.adapters.binance.futures.http.account import (
         BinanceFuturesAccountHttpAPI,
     )
@@ -38,4 +46,5 @@ def patch_binance_futures_for_testnet():
     # Replace method
     BinanceFuturesAccountHttpAPI.query_futures_position_risk = patched_query_futures_position_risk
 
+    _state["patched"] = True
     return True

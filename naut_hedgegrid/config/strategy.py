@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from naut_hedgegrid.config.base import BaseYamlConfigLoader
+from naut_hedgegrid.config.operations import OperationsConfig
 
 
 class StrategyDetails(BaseModel):
@@ -97,6 +98,18 @@ class ExecutionConfig(BaseModel):
         ge=0,
         le=1000,
         description="Maximum price deviation from market to attempt retries (100 = 1%)",
+    )
+    balance_check_interval_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=600,
+        description="Interval between balance checks in seconds",
+    )
+    tp_sl_adjustment_buffer_bps: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=50.0,
+        description="Buffer in bps for adjusting TP/SL near market price (5.0 = 0.05%)",
     )
 
 
@@ -210,6 +223,12 @@ class RiskManagementConfig(BaseModel):
         le=50.0,
         description="Maximum drawdown percentage before emergency position flattening",
     )
+    circuit_breaker_window_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=600,
+        description="Sliding window in seconds for circuit breaker error rate counting",
+    )
     enable_position_validation: bool = Field(
         default=True,
         description="Validate order size against account balance before submission",
@@ -245,6 +264,11 @@ class HedgeGridConfig(BaseModel):
     risk_management: RiskManagementConfig | None = Field(
         default_factory=RiskManagementConfig,
         description="Advanced risk management and circuit breaker settings",
+    )
+    operations: OperationsConfig | None = Field(
+        default=None,
+        description="Optional operational controls config (kill switch, alerts). "
+        "If not set, defaults are used when --enable-ops is passed.",
     )
 
 
