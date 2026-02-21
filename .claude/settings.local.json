@@ -41,7 +41,8 @@
       "Bash(ps:*)",
       "Bash(find:*)",
       "Bash(env:*)",
-      "Bash(pgrep:*)"
+      "Bash(pgrep:*)",
+      "Bash(make format:*)"
     ],
     "deny": [],
     "ask": []
