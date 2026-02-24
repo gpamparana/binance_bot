@@ -621,3 +621,77 @@ class TestNormalizerPerformance:
         result = normalize_trades(df, "test")
 
         assert len(result) == 1
+
+
+# ============================================================================
+# Gap Detection Tests
+# ============================================================================
+
+
+class TestDetectGaps:
+    """Tests for _detect_gaps helper function."""
+
+    def test_gap_detected_logs_warning(self, caplog):
+        """Test that gaps exceeding threshold produce a warning."""
+        df = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    [
+                        "2024-01-01 00:00:00",
+                        "2024-01-01 00:01:00",
+                        "2024-01-01 00:10:00",  # 9 min gap (> 5 min threshold)
+                        "2024-01-01 00:11:00",
+                    ],
+                    utc=True,
+                ),
+            }
+        )
+
+        with caplog.at_level("WARNING"):
+            _detect_gaps(df, "trades", max_gap_minutes=5.0)
+
+        assert "data gap" in caplog.text.lower()
+        assert "trades" in caplog.text
+
+    def test_gap_below_threshold_no_warning(self, caplog):
+        """Test that gaps below threshold produce no warning."""
+        df = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(
+                    [
+                        "2024-01-01 00:00:00",
+                        "2024-01-01 00:01:00",
+                        "2024-01-01 00:02:00",
+                        "2024-01-01 00:03:00",
+                    ],
+                    utc=True,
+                ),
+            }
+        )
+
+        with caplog.at_level("WARNING"):
+            _detect_gaps(df, "trades", max_gap_minutes=5.0)
+
+        assert "gap" not in caplog.text.lower()
+
+    def test_no_gaps_in_continuous_data(self, caplog):
+        """Test that evenly-spaced data produces no warning."""
+        timestamps = pd.date_range("2024-01-01", periods=100, freq="1min", tz="UTC")
+        df = pd.DataFrame({"timestamp": timestamps})
+
+        with caplog.at_level("WARNING"):
+            _detect_gaps(df, "mark prices", max_gap_minutes=5.0)
+
+        assert "gap" not in caplog.text.lower()
+
+    def test_single_row_no_error(self):
+        """Test that single-row DataFrames don't error."""
+        df = pd.DataFrame({"timestamp": pd.to_datetime(["2024-01-01 00:00:00"], utc=True)})
+        # Should not raise
+        _detect_gaps(df, "trades", max_gap_minutes=5.0)
+
+    def test_empty_dataframe_no_error(self):
+        """Test that empty DataFrames don't error."""
+        df = pd.DataFrame({"timestamp": pd.Series([], dtype="datetime64[ns, UTC]")})
+        # Should not raise
+        _detect_gaps(df, "trades", max_gap_minutes=5.0)

@@ -221,6 +221,62 @@ class BaseRunner(ABC):
             },
         )
 
+    def _warmup_strategy(
+        self,
+        strategy: object,
+        hedge_grid_cfg: HedgeGridConfig,
+        venue_cfg: VenueConfig,
+    ) -> None:
+        """Fetch historical bars and warm up the strategy's regime detector.
+
+        Called after node.build() and before node.run(). Sets prefetched bars
+        on the strategy instance so on_start() can consume them without
+        needing API access.
+
+        Warmup failure is non-fatal — the strategy will start without warmup.
+
+        Parameters
+        ----------
+        strategy : object
+            HedgeGridV1 strategy instance (typed as object to avoid import cycle)
+        hedge_grid_cfg : HedgeGridConfig
+            Strategy configuration with regime parameters
+        venue_cfg : VenueConfig
+            Venue configuration with API credentials
+        """
+        try:
+            from naut_hedgegrid.warmup import BinanceDataWarmer
+        except ImportError as e:
+            self.console.print(f"[yellow]Warmup module not available: {e}[/yellow]")
+            return
+
+        try:
+            instrument_id_str = hedge_grid_cfg.strategy.instrument_id
+            symbol = instrument_id_str.split("-")[0]
+            regime_cfg = hedge_grid_cfg.regime
+            warmup_bars = max(regime_cfg.ema_slow + 20, 70)
+
+            self.console.print(
+                f"[cyan]Fetching {warmup_bars} historical bars for warmup (testnet={venue_cfg.api.testnet})...[/cyan]"
+            )
+
+            with BinanceDataWarmer(venue_cfg) as warmer:
+                historical_bars = warmer.fetch_detector_bars(
+                    symbol=symbol,
+                    num_bars=warmup_bars,
+                    interval="1m",
+                )
+
+            if historical_bars:
+                # Store prefetched bars on strategy instance for on_start() to consume
+                strategy._prefetched_warmup_bars = historical_bars  # type: ignore[attr-defined]  # noqa: SLF001
+                self.console.print(f"[green]✓[/green] Fetched {len(historical_bars)} warmup bars")
+            else:
+                self.console.print("[yellow]No warmup bars fetched, starting without warmup[/yellow]")
+
+        except Exception as e:
+            self.console.print(f"[yellow]Warmup failed: {e}. Starting without warmup.[/yellow]")
+
     def create_bar_type(self, instrument_id_str: str) -> BarType:
         """Create BarType object for 1-minute bars.
 
@@ -549,6 +605,12 @@ class BaseRunner(ABC):
             try:
                 self.node.build()
                 self.console.print("[green]✓[/green] Node built successfully")
+
+                # Warmup: Fetch historical bars before run() so on_start() can
+                # consume them without API calls. Strategy instance is available
+                # after build().
+                warmup_strategy = self.node.trader.strategies()[0]
+                self._warmup_strategy(warmup_strategy, hedge_grid_cfg, venue_cfg)
 
                 # Start operational infrastructure BEFORE node.run() since run() blocks
                 if enable_ops:

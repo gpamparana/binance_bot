@@ -330,27 +330,82 @@ def run_backtest_mode(
     Returns:
         dict with extracted results (orders, positions, account, etc.)
     """
+    from naut_hedgegrid.config.backtest import (
+        BacktestDetails,
+        BalanceConfig,
+        DataConfig,
+        DataSourceConfig,
+        DataTypeConfig,
+        ExecutionSimConfig,
+        FeeConfig,
+        FillModelConfig,
+        InstrumentDataConfig,
+        LatencyConfig,
+        MetricsConfig,
+        OutputConfig,
+        RiskControlConfig,
+        StrategyBacktestConfig,
+        TimeRangeConfig,
+        VenueBacktestConfig,
+    )
+    from naut_hedgegrid.strategies.hedge_grid_v1 import HedgeGridV1Config
+
     # Set random seeds
     random.seed(random_seed)
     np.random.seed(random_seed)
 
-    # Create backtest config
+    # Create backtest config with proper nested models
     config = BacktestConfig(
-        name="parity_test_backtest",
-        catalog_path=str(catalog_path),
-        instrument_ids=[instrument_id],
-        start_time="2024-01-01T00:00:00Z",
-        end_time="2024-01-01T01:00:00Z",
-        data_types=["TradeTick"],
-        venue_config_path=str(venue_config_path),
-        strategy_config_path=str(strategy_config_path),
-        starting_balance_usdt=10000.0,
+        backtest=BacktestDetails(name="parity_test_backtest"),
+        time_range=TimeRangeConfig(
+            start_time=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+            end_time=datetime(2024, 1, 1, 1, 0, 0, tzinfo=UTC),
+        ),
+        data=DataConfig(
+            catalog_path=str(catalog_path),
+            instruments=[
+                InstrumentDataConfig(
+                    instrument_id=instrument_id,
+                    data_types=[DataTypeConfig(type="TradeTick")],
+                ),
+            ],
+            sources=[
+                DataSourceConfig(type="parquet", path=str(catalog_path)),
+            ],
+        ),
+        venues=[
+            VenueBacktestConfig(
+                config_path=str(venue_config_path),
+                starting_balances=[BalanceConfig(currency="USDT", total=10000.0)],
+            ),
+        ],
+        strategies=[
+            StrategyBacktestConfig(config_path=str(strategy_config_path)),
+        ],
+        execution=ExecutionSimConfig(
+            latency=LatencyConfig(),
+            fill_model=FillModelConfig(),
+            fees=FeeConfig(),
+        ),
+        risk=RiskControlConfig(),
+        output=OutputConfig(log_level="WARNING", log_level_file=None),
+        metrics=MetricsConfig(),
+    )
+
+    # Create strategy config
+    strategy_cfg = HedgeGridV1Config(
+        instrument_id=instrument_id,
+        hedge_grid_config_path=str(strategy_config_path),
+        enable_warmup=False,
     )
 
     # Run backtest
-    runner = BacktestRunner(config)
+    runner = BacktestRunner(
+        backtest_config=config,
+        strategy_configs=[strategy_cfg],
+    )
     catalog = runner.setup_catalog()
-    engine, perf = runner.run(catalog)
+    engine, _data = runner.run(catalog)
 
     # Extract results
     results = runner.extract_results(engine)
@@ -570,7 +625,6 @@ def print_diff_table(df: pd.DataFrame, passed: bool) -> None:
 # ============================================================================
 
 
-@pytest.mark.skip(reason="BacktestConfig API changed - parity test needs refactoring to new schema")
 def test_parity_backtest_vs_paper(
     sample_catalog,
     test_strategy_config_path,
@@ -636,7 +690,6 @@ def test_parity_backtest_vs_paper(
         console.print("\n[green]✓ Parity test PASSED - all metrics within tolerance[/green]\n")
 
 
-@pytest.mark.skip(reason="BacktestConfig API changed - determinism test needs refactoring to new schema")
 def test_backtest_determinism(
     sample_catalog,
     test_strategy_config_path,

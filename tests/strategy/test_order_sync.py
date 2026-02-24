@@ -1,6 +1,7 @@
 """Tests for order synchronization and diffing."""
 
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from naut_hedgegrid.domain.types import (
     Ladder,
@@ -830,3 +831,124 @@ def test_diff_complex_scenario() -> None:
     assert len(result.adds) == 1  # New rung at 98.0
     assert len(result.replaces) == 1  # Price changed at 99.0
     assert len(result.cancels) == 1  # Old order at 97.0
+
+
+# ============================================================================
+# Hypothesis Property-Based Tests
+# ============================================================================
+
+_prices = st.floats(min_value=10.0, max_value=100_000.0, allow_nan=False, allow_infinity=False)
+_qtys = st.floats(min_value=0.001, max_value=10.0, allow_nan=False, allow_infinity=False)
+_sides = st.sampled_from([Side.LONG, Side.SHORT])
+_rung_counts = st.integers(min_value=1, max_value=10)
+
+
+def _make_rungs(side: Side, count: int, base_price: float = 100.0, spacing: float = 1.0) -> list[Rung]:
+    """Create a list of rungs for testing."""
+    rungs = []
+    for i in range(count):
+        if side == Side.LONG:
+            price = base_price - (i + 1) * spacing
+        else:
+            price = base_price + (i + 1) * spacing
+        if price <= 0:
+            break
+        rungs.append(Rung(price=price, qty=0.5, side=side))
+    return rungs
+
+
+@given(count=_rung_counts, side=_sides)
+@settings(max_examples=100)
+def test_prop_empty_live_only_adds(count: int, side: Side) -> None:
+    """With no live orders, diff should only produce adds (no cancels/replaces)."""
+    guard = create_test_guard()
+    diff = OrderDiff("HG1", guard)
+
+    rungs = _make_rungs(side, count)
+    if not rungs:
+        return
+    ladder = Ladder.from_list(side, rungs)
+
+    result = diff.diff([ladder], [])
+
+    assert len(result.cancels) == 0, "Unexpected cancels with no live orders"
+    assert len(result.replaces) == 0, "Unexpected replaces with no live orders"
+    assert len(result.adds) == len(rungs), f"Expected {len(rungs)} adds, got {len(result.adds)}"
+
+
+@given(count=_rung_counts, side=_sides)
+@settings(max_examples=100)
+def test_prop_matching_live_no_operations(count: int, side: Side) -> None:
+    """When live orders match desired exactly, diff should produce no operations."""
+    guard = create_test_guard()
+    diff = OrderDiff("HG1", guard)
+
+    rungs = _make_rungs(side, count)
+    if not rungs:
+        return
+    ladder = Ladder.from_list(side, rungs)
+
+    # Create matching live orders with proper client_order_ids
+    live = [
+        LiveOrder(
+            client_order_id=f"HG1-{side.value}-{i + 1:02d}-1234567890",
+            side=side,
+            price=rung.price,
+            qty=rung.qty,
+            status="OPEN",
+        )
+        for i, rung in enumerate(rungs)
+    ]
+
+    result = diff.diff([ladder], live)
+
+    assert result.is_empty, (
+        f"Expected no operations but got "
+        f"{len(result.adds)} adds, {len(result.cancels)} cancels, {len(result.replaces)} replaces"
+    )
+
+
+@given(
+    long_count=st.integers(min_value=0, max_value=8),
+    short_count=st.integers(min_value=0, max_value=8),
+)
+@settings(max_examples=100)
+def test_prop_intent_count_never_exceeds_desired(long_count: int, short_count: int) -> None:
+    """Total order intents (adds + replaces) should never exceed total desired rungs."""
+    guard = create_test_guard()
+    diff = OrderDiff("HG1", guard)
+
+    ladders: list[Ladder] = []
+    total_desired = 0
+
+    if long_count > 0:
+        long_rungs = _make_rungs(Side.LONG, long_count, base_price=100.0, spacing=1.0)
+        if long_rungs:
+            ladders.append(Ladder.from_list(Side.LONG, long_rungs))
+            total_desired += len(long_rungs)
+
+    if short_count > 0:
+        short_rungs = _make_rungs(Side.SHORT, short_count, base_price=100.0, spacing=1.0)
+        if short_rungs:
+            ladders.append(Ladder.from_list(Side.SHORT, short_rungs))
+            total_desired += len(short_rungs)
+
+    # Mix of matching and non-matching live orders
+    live: list[LiveOrder] = []
+    if long_count > 0:
+        live.append(
+            LiveOrder(
+                client_order_id="HG1-LONG-01-9999999999",
+                side=Side.LONG,
+                price=50.0,  # Won't match any desired
+                qty=0.5,
+                status="OPEN",
+            )
+        )
+
+    result = diff.diff(ladders, live)
+
+    # Adds + replaces can never exceed total desired rungs
+    assert (
+        len(result.adds) + len(result.replaces) <= total_desired
+    ), f"Intent count {len(result.adds) + len(result.replaces)} exceeds desired {total_desired}"

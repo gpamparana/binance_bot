@@ -359,9 +359,17 @@ class HedgeGridV1(Strategy):
         # Hydrate grid orders cache from exchange (prevents duplicate orders on restart)
         self._hydrate_grid_orders_cache()
 
-        # Perform warmup if configured
-        # The warmup will fetch historical data and pre-warm the regime detector
-        self._perform_warmup()
+        # Load persisted state (peak_balance, realized_pnl) for live/paper modes
+        self._load_persisted_state()
+
+        # Consume prefetched warmup bars (set by runner layer before node.run())
+        # Falls back to legacy _perform_warmup() if no prefetched bars available
+        prefetched = getattr(self, "_prefetched_warmup_bars", None)
+        if prefetched:
+            self.warmup_regime_detector(prefetched)
+            del self._prefetched_warmup_bars  # Free memory
+        elif self.config.enable_warmup and not self._is_backtest_mode:
+            self._perform_warmup()
 
         self.log.info("HedgeGridV1 strategy started successfully")
 
@@ -593,7 +601,91 @@ class HedgeGridV1(Strategy):
                 if order.is_open:
                     self.cancel_order(order)
 
+        # Persist state before shutdown
+        self._save_persisted_state()
+
         self.log.info("HedgeGridV1 strategy stopped")
+
+    def on_reset(self) -> None:
+        """
+        Reset the strategy to initial state.
+
+        Called by the optimization framework when reusing a strategy instance
+        between trials. All mutable state must be cleared.
+        """
+        self.log.info("Resetting HedgeGridV1 strategy")
+
+        # Configuration (reloaded in on_start)
+        self._hedge_grid_config = None
+        self._instrument = None
+        self.bar_type = None
+
+        # Components (recreated in on_start)
+        self._precision_guard = None
+        self._regime_detector = None
+        self._funding_guard = None
+        self._order_diff = None
+        self._retry_handler = None
+
+        # Tracking state
+        self._last_mid = None
+        self._grid_center = 0.0
+        self._last_long_ladder = None
+        self._last_short_ladder = None
+        self._last_funding_rate = 0.0
+        self._total_fills = 0
+        self._maker_fills = 0
+        self._start_time = None
+        self._last_bar_time = None
+        self._order_id_counter = 0
+        self._last_diagnostic_log = 0
+
+        # PnL & risk state
+        self._peak_balance = 0.0
+        self._initial_balance = None
+        self._realized_pnl = 0.0
+        self._drawdown_protection_triggered = False
+        self._circuit_breaker_active = False
+        self._circuit_breaker_reset_time = None
+        self._error_window.clear()
+        self._pause_trading = False
+        self._critical_error = False
+        self._throttle = 1.0
+        self._last_balance_check = 0.0
+
+        # Order caches
+        self._grid_orders_cache.clear()
+        self._fills_with_exits.clear()
+        self._tp_sl_pairs.clear()
+        self._pending_retries.clear()
+        self._processed_rejections.clear()
+        self._position_retry_counts.clear()
+        self._parsed_order_id_cache.clear()
+        self._positions_reconciled = False
+
+        # Mode flags (reset to defaults, set properly in on_start)
+        self._is_optimization_mode = False
+        self._is_backtest_mode = False
+
+        self.log.info("HedgeGridV1 strategy reset complete")
+
+    def on_dispose(self) -> None:
+        """
+        Dispose the strategy (final cleanup before destruction).
+
+        Performs a final state save for live/paper modes.
+        """
+        self._save_persisted_state()
+        self.log.info("HedgeGridV1 strategy disposed")
+
+    def on_degrade(self) -> None:
+        """
+        Handle degraded state (e.g., data feed issues).
+
+        Pauses trading to prevent placing orders on stale data.
+        """
+        self._pause_trading = True
+        self.log.warning("HedgeGridV1 strategy degraded — trading paused")
 
     def _hydrate_grid_orders_cache(self) -> None:
         """Hydrate grid order cache from Nautilus cache after exchange reconciliation.
@@ -1074,6 +1166,8 @@ class HedgeGridV1(Strategy):
                             pos = self.cache.position(PositionId(f"{self.instrument_id}-SHORT"))
                             if pos and hasattr(pos, "avg_px_open"):
                                 self._realized_pnl += (float(pos.avg_px_open) - fill_price) * fill_qty
+                    # Save state after PnL update
+                    self._save_persisted_state()
                 except Exception as e:
                     self.log.warning(f"PnL tracking failed for {client_order_id}: {e}")
 
@@ -2416,6 +2510,101 @@ class HedgeGridV1(Strategy):
         short_cost = -funding_rate * (1 / 8) * short_inventory  # Short receives funding
 
         return long_cost + short_cost
+
+    # =====================================================================
+    # STATE PERSISTENCE
+    # =====================================================================
+
+    def _state_file_path(self) -> str | None:
+        """Return path for persisted state file, or None in backtest/optimization mode."""
+        if self._is_backtest_mode or self._is_optimization_mode:
+            return None
+        from pathlib import Path
+
+        artifacts_dir = Path.cwd() / "artifacts"
+        safe_id = str(self.instrument_id).replace(".", "_").replace("/", "_")
+        return str(artifacts_dir / f"strategy_state_{safe_id}.json")
+
+    def _load_persisted_state(self) -> None:
+        """Load persisted peak_balance and realized_pnl from disk.
+
+        Only runs in live/paper mode. Failures are non-fatal (log warning, continue
+        with defaults).
+        """
+        import json
+        from pathlib import Path
+
+        path = self._state_file_path()
+        if path is None:
+            return
+
+        if not Path(path).exists():
+            self.log.info("No persisted state file found, starting fresh")
+            return
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+
+            if not isinstance(data, dict):
+                self.log.warning(f"Invalid persisted state format, ignoring: {path}")
+                return
+
+            restored_peak = data.get("peak_balance", 0.0)
+            restored_pnl = data.get("realized_pnl", 0.0)
+
+            if isinstance(restored_peak, int | float) and restored_peak > 0:
+                self._peak_balance = float(restored_peak)
+            if isinstance(restored_pnl, int | float):
+                self._realized_pnl = float(restored_pnl)
+
+            self.log.info(
+                f"Restored persisted state: peak_balance={self._peak_balance:.2f}, "
+                f"realized_pnl={self._realized_pnl:.2f}"
+            )
+        except Exception as e:
+            self.log.warning(f"Failed to load persisted state from {path}: {e}")
+
+    def _save_persisted_state(self) -> None:
+        """Save peak_balance and realized_pnl to disk atomically.
+
+        Only runs in live/paper mode. Failures are non-fatal.
+        """
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+
+        path = self._state_file_path()
+        if path is None:
+            return
+
+        try:
+            artifacts_dir = Path(path).parent
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+            data = {
+                "peak_balance": self._peak_balance,
+                "realized_pnl": self._realized_pnl,
+                "last_saved": datetime.now(tz=UTC).isoformat(),
+                "instrument_id": str(self.instrument_id),
+            }
+
+            # Atomic write via temp file + rename
+            fd, tmp_path = tempfile.mkstemp(dir=str(artifacts_dir), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                Path(tmp_path).replace(path)
+            except BaseException:
+                # Clean up temp file on failure
+                try:
+                    Path(tmp_path).unlink()
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            self.log.warning(f"Failed to save persisted state to {path}: {e}")
 
     def _get_realized_pnl(self) -> float:
         """Get total realized PnL accumulated from TP/SL fill events."""

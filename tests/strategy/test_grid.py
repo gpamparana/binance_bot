@@ -1,6 +1,7 @@
 """Tests for grid construction and adaptive re-centering."""
 
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from naut_hedgegrid.config.strategy import (
     ExecutionConfig,
@@ -519,3 +520,159 @@ def test_invalid_mid_price_negative() -> None:
 
     with pytest.raises(ValueError, match="Mid price must be positive"):
         GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+
+
+# ============================================================================
+# Hypothesis Property-Based Tests
+# ============================================================================
+
+# Strategies for valid grid parameters
+# min_value=100.0 ensures grid_step_bps >= 5 bps produces steps >= 0.05,
+# so the 0.01 price quantization doesn't collapse distinct levels.
+_mid_prices = st.floats(min_value=100.0, max_value=100_000.0, allow_nan=False, allow_infinity=False)
+_grid_step_bps = st.floats(min_value=5.0, max_value=500.0, allow_nan=False, allow_infinity=False)
+_grid_levels = st.integers(min_value=1, max_value=10)
+_base_qty = st.floats(min_value=0.001, max_value=0.1, allow_nan=False, allow_infinity=False)
+_qty_scale = st.floats(min_value=1.0, max_value=2.0, allow_nan=False, allow_infinity=False)
+_regimes = st.sampled_from([Regime.UP, Regime.DOWN, Regime.SIDEWAYS])
+
+
+def _make_cfg(
+    grid_step_bps: float = 25.0,
+    grid_levels_long: int = 5,
+    grid_levels_short: int = 5,
+    base_qty: float = 0.01,
+    qty_scale: float = 1.1,
+) -> HedgeGridConfig:
+    """Create a config for hypothesis tests with generous inventory cap."""
+    return create_test_config(
+        grid_step_bps=grid_step_bps,
+        grid_levels_long=grid_levels_long,
+        grid_levels_short=grid_levels_short,
+        base_qty=base_qty,
+        qty_scale=qty_scale,
+        max_inventory_quote=1_000_000.0,
+    )
+
+
+@given(mid=_mid_prices, regime=_regimes)
+@settings(max_examples=100)
+def test_prop_long_prices_monotonically_decreasing(mid: float, regime: Regime) -> None:
+    """LONG prices must be monotonically decreasing from mid."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, regime)
+    long_ladder = ladders[0]
+    prices = [r.price for r in long_ladder]
+    for i in range(len(prices) - 1):
+        assert prices[i] > prices[i + 1], f"LONG prices not decreasing: {prices}"
+
+
+@given(mid=_mid_prices, regime=_regimes)
+@settings(max_examples=100)
+def test_prop_short_prices_monotonically_increasing(mid: float, regime: Regime) -> None:
+    """SHORT prices must be monotonically increasing from mid."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, regime)
+    short_ladder = ladders[1]
+    prices = [r.price for r in short_ladder]
+    for i in range(len(prices) - 1):
+        assert prices[i] < prices[i + 1], f"SHORT prices not increasing: {prices}"
+
+
+@given(
+    mid=_mid_prices,
+    regime=_regimes,
+    step=_grid_step_bps,
+    levels=_grid_levels,
+    base=_base_qty,
+    scale=_qty_scale,
+)
+@settings(max_examples=100)
+def test_prop_all_prices_strictly_positive(
+    mid: float, regime: Regime, step: float, levels: int, base: float, scale: float
+) -> None:
+    """All grid prices must be strictly positive for any valid config."""
+    cfg = create_test_config(
+        grid_step_bps=step,
+        grid_levels_long=levels,
+        grid_levels_short=levels,
+        base_qty=base,
+        qty_scale=scale,
+        max_inventory_quote=1e12,  # Very large to avoid inventory cap in this test
+    )
+    ladders = GridEngine.build_ladders(mid, cfg, regime)
+    for ladder in ladders:
+        for rung in ladder:
+            assert rung.price > 0, f"Non-positive price {rung.price} for mid={mid}, step={step}"
+
+
+@given(mid=_mid_prices, scale=st.floats(min_value=1.0, max_value=2.0, allow_nan=False, allow_infinity=False))
+@settings(max_examples=100)
+def test_prop_quantities_follow_geometric_scaling(mid: float, scale: float) -> None:
+    """Quantities must follow geometric scaling: qty[i+1] = qty[i] * scale."""
+    cfg = _make_cfg(qty_scale=scale, grid_levels_long=5, grid_levels_short=5)
+    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+    for ladder in ladders:
+        qtys = [r.qty for r in ladder]
+        for i in range(len(qtys) - 1):
+            expected = qtys[i] * scale
+            assert qtys[i + 1] == pytest.approx(
+                expected, rel=0.01
+            ), f"Geometric scaling violated: qty[{i}]={qtys[i]}, qty[{i + 1}]={qtys[i + 1]}, expected={expected}"
+
+
+@given(mid=_mid_prices, regime=_regimes)
+@settings(max_examples=100)
+def test_prop_no_price_overlap_between_sides(mid: float, regime: Regime) -> None:
+    """LONG and SHORT ladders must have no overlapping prices."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, regime)
+    long_prices = {r.price for r in ladders[0]}
+    short_prices = {r.price for r in ladders[1]}
+    assert not long_prices & short_prices, "Price overlap between LONG and SHORT"
+    assert all(p < mid for p in long_prices), "LONG price above mid"
+    assert all(p > mid for p in short_prices), "SHORT price below mid"
+
+
+@given(mid=_mid_prices)
+@settings(max_examples=100)
+def test_prop_tp_above_entry_for_long(mid: float) -> None:
+    """Take profit must be above entry price for LONG positions."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+    for rung in ladders[0]:  # LONG ladder
+        if rung.tp is not None:
+            assert rung.tp > rung.price, f"LONG TP {rung.tp} <= entry {rung.price}"
+
+
+@given(mid=_mid_prices)
+@settings(max_examples=100)
+def test_prop_tp_below_entry_for_short(mid: float) -> None:
+    """Take profit must be below entry price for SHORT positions."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+    for rung in ladders[1]:  # SHORT ladder
+        if rung.tp is not None:
+            assert rung.tp < rung.price, f"SHORT TP {rung.tp} >= entry {rung.price}"
+
+
+@given(mid=_mid_prices)
+@settings(max_examples=100)
+def test_prop_sl_below_entry_for_long(mid: float) -> None:
+    """Stop loss must be below entry price for LONG positions."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+    for rung in ladders[0]:  # LONG ladder
+        if rung.sl is not None:
+            assert rung.sl < rung.price, f"LONG SL {rung.sl} >= entry {rung.price}"
+
+
+@given(mid=_mid_prices)
+@settings(max_examples=100)
+def test_prop_sl_above_entry_for_short(mid: float) -> None:
+    """Stop loss must be above entry price for SHORT positions."""
+    cfg = _make_cfg()
+    ladders = GridEngine.build_ladders(mid, cfg, Regime.SIDEWAYS)
+    for rung in ladders[1]:  # SHORT ladder
+        if rung.sl is not None:
+            assert rung.sl > rung.price, f"SHORT SL {rung.sl} <= entry {rung.price}"
