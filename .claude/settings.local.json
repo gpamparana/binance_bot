@@ -44,7 +44,8 @@
       "Bash(pgrep:*)",
       "Bash(make format:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "Bash(\"/Users/giovanni/Library/Mobile Documents/com~apple~CloudDocs/binance_bot/naut_hedgegrid/strategies/hedge_grid_v1/strategy.py.tmp\")"
     ],
     "deny": [],
     "ask": []
