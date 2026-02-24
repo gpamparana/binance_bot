@@ -14,6 +14,34 @@ from naut_hedgegrid.data.schemas import validate_dataframe_schema
 logger = logging.getLogger(__name__)
 
 
+def _detect_gaps(df: pd.DataFrame, data_type: str, max_gap_minutes: float = 5.0) -> None:
+    """Log warnings for time gaps exceeding threshold in sorted data.
+
+    Args:
+        df: DataFrame with a sorted "timestamp" column
+        data_type: Data type name for log context (e.g., "trades", "mark prices")
+        max_gap_minutes: Maximum allowed gap in minutes before warning
+
+    """
+    if len(df) < 2:
+        return
+    diffs = df["timestamp"].diff().iloc[1:]
+    threshold = pd.Timedelta(minutes=max_gap_minutes)
+    large_gaps = diffs[diffs > threshold]
+    if large_gaps.empty:
+        return
+    gap_details = []
+    for idx in large_gaps.index[:5]:
+        gap_start = df["timestamp"].iloc[idx - 1]
+        gap_end = df["timestamp"].iloc[idx]
+        gap_duration = large_gaps.loc[idx]
+        gap_details.append(f"{gap_duration} at {gap_start} -> {gap_end}")
+    logger.warning(
+        f"Detected {len(large_gaps)} data gap(s) exceeding {max_gap_minutes} min in {data_type}: "
+        + "; ".join(gap_details)
+    )
+
+
 def normalize_trades(df: pd.DataFrame, source_type: str = "unknown") -> pd.DataFrame:
     """
     Normalize trade data to TradeSchema format.
@@ -86,6 +114,9 @@ def normalize_trades(df: pd.DataFrame, source_type: str = "unknown") -> pd.DataF
     if len(df) < initial_len:
         logger.info(f"Removed {initial_len - len(df)} duplicate trades")
 
+    # Detect data gaps
+    _detect_gaps(df, "trades", max_gap_minutes=5.0)
+
     # Validate against schema
     validate_dataframe_schema(df, "trade")
 
@@ -155,6 +186,9 @@ def normalize_mark_prices(df: pd.DataFrame, source_type: str = "unknown") -> pd.
     if len(df) < initial_len:
         logger.info(f"Removed {initial_len - len(df)} duplicate mark price bars")
 
+    # Detect data gaps
+    _detect_gaps(df, "mark prices", max_gap_minutes=15.0)
+
     logger.info(f"Normalized {len(df):,} mark price bars successfully")
     return df
 
@@ -217,6 +251,9 @@ def normalize_funding_rates(df: pd.DataFrame, source_type: str = "unknown") -> p
     df = df.drop_duplicates(subset=["timestamp"], keep="last")
     if len(df) < initial_len:
         logger.info(f"Removed {initial_len - len(df)} duplicate funding rates")
+
+    # Detect data gaps (8h funding interval + buffer)
+    _detect_gaps(df, "funding rates", max_gap_minutes=490.0)
 
     # Validate schema
     validate_dataframe_schema(df, "funding")
@@ -285,6 +322,15 @@ def _normalize_timestamp(ts_series: pd.Series) -> pd.Series:
             unit = "ns"
 
         result = pd.to_datetime(ts_series, unit=unit, utc=True)
+        # Validate bounds to catch misclassified timestamps
+        if len(result) > 0:
+            min_year = result.min().year
+            max_year = result.max().year
+            if min_year < 2010 or max_year > 2035:
+                raise ValueError(
+                    f"Timestamp bounds check failed: dates range from {min_year} to {max_year}. "
+                    "Expected range [2010, 2035]. Check timestamp unit classification."
+                )
         return result
 
     # Fallback: try generic parsing

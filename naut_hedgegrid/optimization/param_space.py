@@ -200,7 +200,6 @@ class ParameterSpace:
         """Suggest a float parameter from trial."""
         if bounds.step is not None:
             # Discrete float with step
-            int((bounds.max_value - bounds.min_value) / bounds.step) + 1
             return trial.suggest_float(name, bounds.min_value, bounds.max_value, step=bounds.step)
         # Continuous float
         return trial.suggest_float(name, bounds.min_value, bounds.max_value, log=bounds.log_scale)

@@ -120,13 +120,17 @@ class PrecisionGuard:
 
         Notes:
             Rounds to nearest tick (not down) to minimize distance from desired price.
+            Uses Decimal arithmetic to avoid float precision errors.
             For example, with tick=0.01:
             - 100.123 → 100.12
             - 100.126 → 100.13
 
         """
-        tick = self._precision.price_tick
-        return round(price / tick) * tick
+        from decimal import ROUND_HALF_UP, Decimal
+
+        tick_d = Decimal(str(self._precision.price_tick))
+        price_d = Decimal(str(price))
+        return float((price_d / tick_d).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_d)
 
     def clamp_qty(self, qty: float) -> float:
         """Round quantity down to valid step and enforce min/max.
@@ -139,17 +143,19 @@ class PrecisionGuard:
 
         Notes:
             - Rounds DOWN to nearest step (conservative for risk management)
+            - Uses Decimal arithmetic to avoid float precision errors
             - Enforces min_qty (returns 0 if below minimum)
             - Enforces max_qty (caps at maximum)
             - Returns 0 if quantity becomes invalid after clamping
 
         """
-        import math
+        from decimal import ROUND_DOWN, Decimal
 
-        step = self._precision.qty_step
+        step_d = Decimal(str(self._precision.qty_step))
+        qty_d = Decimal(str(qty))
 
-        # Round down to nearest step using floor
-        clamped = math.floor(qty / step) * step
+        # Round down to nearest step using Decimal floor
+        clamped = float((qty_d / step_d).to_integral_value(rounding=ROUND_DOWN) * step_d)
 
         # Check minimum
         if clamped < self._precision.min_qty:

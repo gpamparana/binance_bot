@@ -132,18 +132,11 @@ class AlertManager:
         if isinstance(severity, str):
             severity = AlertSeverity(severity)
 
-        # Run async version
+        # Run async version — asyncio.run() always creates a fresh event loop
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is running, schedule task
-                asyncio.create_task(self.send_alert_async(message, severity, extra_data))
-            else:
-                # Otherwise, run until complete
-                loop.run_until_complete(self.send_alert_async(message, severity, extra_data))
-        except RuntimeError:
-            # No event loop, create new one
             asyncio.run(self.send_alert_async(message, severity, extra_data))
+        except Exception as e:
+            self.logger.error(f"Alert delivery failed: {e}")
 
     async def send_alert_async(
         self,

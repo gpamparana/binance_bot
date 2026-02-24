@@ -210,6 +210,7 @@ class StrategyAPI:
         api_key: str | None = None,
         require_auth: bool = True,
         cors_origins: list[str] | None = None,
+        disable_docs: bool = False,
     ) -> None:
         """Initialize FastAPI application with strategy callback.
 
@@ -220,6 +221,7 @@ class StrategyAPI:
             require_auth: If True, mutating endpoints require API key even if
                 api_key is not set (returns 403). Defaults to True for safety.
             cors_origins: Allowed CORS origins. Defaults to localhost only.
+            disable_docs: If True, disable Swagger /docs and /redoc endpoints.
         """
         self._raw_strategy_callback = strategy_callback
         self.api_key = api_key
@@ -242,6 +244,8 @@ class StrategyAPI:
             title="HedgeGrid Trading API",
             description="Operational control and monitoring for HedgeGrid trading system",
             version="1.0.0",
+            docs_url=None if disable_docs else "/docs",
+            redoc_url=None if disable_docs else "/redoc",
         )
 
         # Add CORS middleware with restricted origins
@@ -398,7 +402,7 @@ class StrategyAPI:
                 )
             except Exception as e:
                 logger.error(f"Status query failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to get status: {e}") from e
+                raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
         @self.app.post("/start", response_model=OperationResponse, tags=["Operations"])
         async def start_strategy(x_api_key: str | None = Header(None)) -> OperationResponse:
@@ -409,17 +413,10 @@ class StrategyAPI:
             """
             self._validate_write_auth(x_api_key)
 
-            try:
-                result = self.strategy_callback("start", {})
-
-                return OperationResponse(
-                    status="started" if result.get("success") else "failed",
-                    timestamp=time.time(),
-                    message=result.get("message"),
-                )
-            except Exception as e:
-                logger.error(f"Start operation failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to start: {e}") from e
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Not yet implemented. Strategy lifecycle is managed by the runner process.",
+            )
 
         @self.app.post("/stop", response_model=OperationResponse, tags=["Operations"])
         async def stop_strategy(x_api_key: str | None = Header(None)) -> OperationResponse:
@@ -430,17 +427,10 @@ class StrategyAPI:
             """
             self._validate_write_auth(x_api_key)
 
-            try:
-                result = self.strategy_callback("stop", {})
-
-                return OperationResponse(
-                    status="stopped" if result.get("success") else "failed",
-                    timestamp=time.time(),
-                    message=result.get("message"),
-                )
-            except Exception as e:
-                logger.error(f"Stop operation failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to stop: {e}") from e
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Not yet implemented. Strategy lifecycle is managed by the runner process.",
+            )
 
         @self.app.post("/flatten", response_model=FlattenResponse, tags=["Operations"])
         async def flatten_positions(request: FlattenRequest, x_api_key: str | None = Header(None)) -> FlattenResponse:
@@ -468,7 +458,7 @@ class StrategyAPI:
                 )
             except Exception as e:
                 logger.error(f"Flatten operation failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to flatten: {e}") from e
+                raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
         @self.app.post("/set-throttle", response_model=ThrottleResponse, tags=["Configuration"])
         async def set_throttle(request: ThrottleRequest, x_api_key: str | None = Header(None)) -> ThrottleResponse:
@@ -492,7 +482,7 @@ class StrategyAPI:
                 )
             except Exception as e:
                 logger.error(f"Throttle update failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to set throttle: {e}") from e
+                raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
         @self.app.get("/ladders", response_model=LaddersResponse, tags=["Data"])
         async def get_ladders(x_api_key: str | None = Header(None)) -> LaddersResponse:

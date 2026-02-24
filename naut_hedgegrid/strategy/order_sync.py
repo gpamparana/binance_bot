@@ -522,6 +522,12 @@ class PostOnlyRetryHandler:
             timestamp_ms=timestamp_ms,
         )
 
+        # Evict old entries to prevent unbounded growth
+        if len(self._retry_history) > 500:
+            keys_to_remove = list(self._retry_history.keys())[:300]
+            for key in keys_to_remove:
+                del self._retry_history[key]
+
         if client_order_id not in self._retry_history:
             self._retry_history[client_order_id] = []
 

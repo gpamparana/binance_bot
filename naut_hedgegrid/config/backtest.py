@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from naut_hedgegrid.config.base import BaseYamlConfigLoader
 
@@ -21,6 +21,13 @@ class TimeRangeConfig(BaseModel):
     start_time: datetime = Field(description="Backtest start time (ISO format)")
     end_time: datetime = Field(description="Backtest end time (ISO format)")
     timezone: str = Field(default="UTC", description="Timezone for timestamps")
+
+    @model_validator(mode="after")
+    def validate_time_order(self) -> "TimeRangeConfig":
+        """Ensure start_time is before end_time."""
+        if self.start_time >= self.end_time:
+            raise ValueError(f"start_time ({self.start_time}) must be before end_time ({self.end_time})")
+        return self
 
 
 class DataTypeConfig(BaseModel):

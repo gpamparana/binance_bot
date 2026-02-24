@@ -200,9 +200,12 @@ def test_price_adjustment_respects_tick_boundaries(retry_handler):
     # Should clamp to nearest tick (0.01)
     adjusted = retry_handler.adjust_price_for_retry(original_price, Side.LONG, 1)
 
-    # Check result is on tick boundary
-    tick = retry_handler._precision_guard.precision.price_tick
-    assert adjusted % tick == pytest.approx(0.0, abs=1e-10)
+    # Check result is on tick boundary using Decimal to avoid float modulo imprecision
+    from decimal import Decimal
+
+    tick_d = Decimal(str(retry_handler._precision_guard.precision.price_tick))
+    adjusted_d = Decimal(str(adjusted))
+    assert adjusted_d % tick_d == Decimal("0")
 
 
 def test_price_adjustment_progressive_movement(retry_handler):

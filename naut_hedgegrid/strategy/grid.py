@@ -41,6 +41,8 @@ class GridEngine:
             msg = f"Mid price must be positive, got {mid}"
             raise ValueError(msg)
 
+        # NOTE: Prices are quantized to 0.01 here (BTCUSDT default). PrecisionGuard
+        # re-clamps to actual instrument tick size before order submission.
         # Calculate price step from basis points using Decimal for precision
         mid_decimal = Decimal(str(mid))
         step_bps = Decimal(str(cfg.grid.grid_step_bps))

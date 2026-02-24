@@ -6,6 +6,12 @@ for efficient parameter optimization across multiple CPU cores.
 
 import logging
 import multiprocessing as mp
+
+# Set start method once at module level (spawn is required for macOS compatibility)
+try:
+    mp.set_start_method("spawn")
+except RuntimeError:
+    pass  # Already set
 import tempfile
 import traceback
 from collections.abc import Callable
@@ -157,13 +163,6 @@ class ParallelBacktestRunner:
         self.max_retries = max_retries
         self.verbose = verbose
         self.console = Console() if verbose else None
-
-        # Set multiprocessing start method to 'spawn' for compatibility
-        try:
-            mp.set_start_method("spawn", force=True)
-        except RuntimeError:
-            # Already set, ignore
-            pass
 
     def run_backtests(
         self, tasks: list[BacktestTask], callback: Callable[[BacktestResult], None] | None = None

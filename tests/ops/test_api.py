@@ -117,23 +117,23 @@ class TestStrategyAPI:
         assert data["running"] is True
         assert data["open_orders"] == 8
 
-    def test_start_endpoint(self, client):
-        """Test start strategy endpoint."""
+    def test_start_endpoint_returns_501(self, client):
+        """Test start strategy endpoint returns 501 Not Implemented."""
         response = client.post("/start")
 
-        assert response.status_code == 200
+        assert response.status_code == 501
         data = response.json()
-        assert "status" in data
-        assert "timestamp" in data
+        assert "detail" in data
+        assert "not yet implemented" in data["detail"].lower()
 
-    def test_stop_endpoint(self, client):
-        """Test stop strategy endpoint."""
+    def test_stop_endpoint_returns_501(self, client):
+        """Test stop strategy endpoint returns 501 Not Implemented."""
         response = client.post("/stop")
 
-        assert response.status_code == 200
+        assert response.status_code == 501
         data = response.json()
-        assert "status" in data
-        assert "timestamp" in data
+        assert "detail" in data
+        assert "not yet implemented" in data["detail"].lower()
 
     def test_flatten_endpoint(self, client):
         """Test flatten positions endpoint."""

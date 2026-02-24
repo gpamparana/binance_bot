@@ -241,7 +241,7 @@ def paper(
         help="Path to strategy config YAML",
     ),
     venue_config: str = typer.Option(
-        "configs/venues/binance_futures.yaml",
+        "configs/venues/binance_futures_testnet.yaml",
         "--venue-config",
         "-v",
         help="Path to venue config YAML",

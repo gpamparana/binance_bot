@@ -6,9 +6,9 @@ readme = "README.md"
 authors = [
     { name = "Giovanni", email = "giopampax@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-    "nautilus-trader",
+    "nautilus-trader>=1.223.0",
     "pydantic>=2",
     "pyyaml",
     "rich",

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from naut_hedgegrid.config.base import BaseYamlConfigLoader
 
@@ -25,6 +25,14 @@ class APIConfig(BaseModel):
     testnet: bool = Field(default=False, description="Use testnet/sandbox environment")
     base_url: HttpUrl | None = Field(default=None, description="Custom base URL for API")
     ws_url: str | None = Field(default=None, description="Custom WebSocket URL")
+
+    @field_validator("api_key", "api_secret")
+    @classmethod
+    def validate_credentials_not_empty(cls, v: str) -> str:
+        """Reject empty or whitespace-only API credentials."""
+        if not v or not v.strip():
+            raise ValueError("API credentials must not be empty. Use ${ENV_VAR} syntax for secrets.")
+        return v
 
 
 class TradingConfig(BaseModel):

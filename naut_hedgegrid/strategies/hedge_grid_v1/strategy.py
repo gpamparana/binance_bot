@@ -187,6 +187,9 @@ class HedgeGridV1(Strategy):
         # Optimization mode flag (set properly in on_start after config load)
         self._is_optimization_mode: bool = False
 
+        # Backtest mode flag (set in on_start based on clock type)
+        self._is_backtest_mode: bool = False
+
     def on_start(self) -> None:
         """
         Start the strategy.
@@ -219,13 +222,15 @@ class HedgeGridV1(Strategy):
                 self.log.info(f"Loaded config from {self.config_path}")
         except Exception as e:
             self.log.error(f"Failed to load config from {self.config_path}: {e}")
+            self._critical_error = True
+            self._pause_trading = True
             return
 
         # Defense-in-depth: verify hedge mode is enabled
         from nautilus_trader.model.enums import OmsType
 
         if self.config.oms_type != OmsType.HEDGING:
-            self.log.critical(
+            self.log.error(
                 f"HedgeGridV1 requires OmsType.HEDGING but got {self.config.oms_type}. "
                 "Set hedge_mode: true in venue config."
             )
@@ -237,6 +242,8 @@ class HedgeGridV1(Strategy):
         self._instrument = self.cache.instrument(self.instrument_id)
         if self._instrument is None:
             self.log.error(f"Instrument {self.instrument_id} not found in cache")
+            self._critical_error = True
+            self._pause_trading = True
             return
 
         self.log.info(f"Trading instrument: {self._instrument.id}")
@@ -310,6 +317,8 @@ class HedgeGridV1(Strategy):
         self._order_diff = OrderDiff(
             strategy_name=self._strategy_name,
             precision_guard=self._precision_guard,
+            price_tolerance_bps=self._hedge_grid_config.execution.order_diff_price_tolerance_bps,
+            qty_tolerance_pct=self._hedge_grid_config.execution.order_diff_qty_tolerance_pct,
         )
         self.log.info("Order diff engine initialized")
 
@@ -326,7 +335,7 @@ class HedgeGridV1(Strategy):
                 BinanceFuturesMarkPriceUpdate,
                 metadata={"instrument_id": self.instrument_id},
             )
-            self.subscribe_data(mark_price_type)
+            self.subscribe_data(mark_price_type, instrument_id=self.instrument_id)
             self.log.info("Subscribed to mark price updates for funding rate data")
         except ImportError:
             self.log.debug("BinanceFuturesMarkPriceUpdate not available (backtest mode), funding guard passive")
@@ -343,6 +352,9 @@ class HedgeGridV1(Strategy):
         # Risk management is already initialized in __init__
         # Risk checks are called during trading: drawdown in on_bar,
         # circuit breaker in on_order_rejected/denied, validation in _execute_add
+
+        # Detect backtest mode based on clock type
+        self._is_backtest_mode = "Test" in self.clock.__class__.__name__
 
         # Hydrate grid orders cache from exchange (prevents duplicate orders on restart)
         self._hydrate_grid_orders_cache()
@@ -479,11 +491,23 @@ class HedgeGridV1(Strategy):
                 if historical_bars:
                     self.log.info(f"✓ Fetched {len(historical_bars)} historical bars")
                     self.warmup_regime_detector(historical_bars)
+                elif self.config.require_warmup_success:
+                    self.log.error(
+                        "No historical bars fetched and require_warmup_success=True. "
+                        "Pausing trading until warmup data is available."
+                    )
+                    self._pause_trading = True
                 else:
                     self.log.warning("No historical bars fetched, starting without warmup")
 
         except Exception as e:
-            self.log.warning(f"Warmup failed: {e}. Starting without warmup.")
+            if self.config.require_warmup_success:
+                self.log.error(
+                    f"Warmup failed and require_warmup_success=True: {e}. Pausing trading until warmup succeeds."
+                )
+                self._pause_trading = True
+            else:
+                self.log.warning(f"Warmup failed: {e}. Starting without warmup.")
 
     def warmup_regime_detector(self, historical_bars: list[DetectorBar]) -> None:
         """
@@ -756,6 +780,18 @@ class HedgeGridV1(Strategy):
         # Update last bar timestamp for metrics
         self._last_bar_time = datetime.fromtimestamp(bar.ts_init / 1_000_000_000, tz=UTC)
 
+        # Stale data guard: skip order placement if bar data is too old (live/paper only)
+        if not self._is_backtest_mode and self._hedge_grid_config.execution.max_bar_staleness_seconds > 0:
+            bar_age_seconds = (datetime.now(tz=UTC) - self._last_bar_time).total_seconds()
+            max_staleness = self._hedge_grid_config.execution.max_bar_staleness_seconds
+            if bar_age_seconds > max_staleness:
+                if not self._is_optimization_mode:
+                    self.log.warning(
+                        f"Bar data stale: age={bar_age_seconds:.0f}s > threshold={max_staleness}s. "
+                        f"Skipping order placement."
+                    )
+                return
+
         # Calculate mid price (using close as proxy)
         mid = float(bar.close)
         self._last_mid = mid
@@ -840,15 +876,16 @@ class HedgeGridV1(Strategy):
             regime=regime,
         )
 
-        self.log.info(
+        self.log.debug(
             f"Built {len(ladders)} ladder(s): " + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
 
         # Log grid center vs current price for debugging
-        deviation_bps = abs(mid - self._grid_center) / self._grid_center * 10000
-        self.log.debug(
-            f"Grid center: {self._grid_center:.2f}, Current mid: {mid:.2f}, Deviation: {deviation_bps:.1f} bps"
-        )
+        if self._grid_center > 0:
+            deviation_bps = abs(mid - self._grid_center) / self._grid_center * 10000
+            self.log.debug(
+                f"Grid center: {self._grid_center:.2f}, Current mid: {mid:.2f}, Deviation: {deviation_bps:.1f} bps"
+            )
 
         # Store ladder state for snapshot access (before any filtering)
         # Note: Python reference assignment is atomic, no lock needed
@@ -867,7 +904,7 @@ class HedgeGridV1(Strategy):
             cfg=self._hedge_grid_config,
         )
 
-        self.log.info(
+        self.log.debug(
             f"After policy: {len(ladders)} ladder(s): "
             + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
         )
@@ -877,7 +914,7 @@ class HedgeGridV1(Strategy):
         ladders = self._funding_guard.adjust_ladders(ladders=ladders, now=now)
 
         if not self._is_optimization_mode:
-            self.log.info(
+            self.log.debug(
                 f"After funding: {len(ladders)} ladder(s): "
                 + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
             )
@@ -886,7 +923,7 @@ class HedgeGridV1(Strategy):
         if self._throttle < 1.0:
             ladders = [self._apply_throttle(ladder) for ladder in ladders]
             if not self._is_optimization_mode:
-                self.log.info(
+                self.log.debug(
                     f"After throttle ({self._throttle:.2f}): "
                     + ", ".join(f"{ladder.side}({len(ladder)} rungs)" for ladder in ladders)
                 )
@@ -1783,6 +1820,14 @@ class HedgeGridV1(Strategy):
             intent: Create intent with order parameters
 
         """
+        # Risk gate: block order submission if trading is paused or circuit breaker active
+        if self._pause_trading or self._circuit_breaker_active:
+            self.log.warning(
+                f"Order {intent.client_order_id} blocked by risk gate "
+                f"(paused={self._pause_trading}, cb={self._circuit_breaker_active})"
+            )
+            return
+
         if self._instrument is None or intent.side is None:
             self.log.warning("Cannot create order: instrument or side missing")
             return
@@ -1978,7 +2023,7 @@ class HedgeGridV1(Strategy):
         if self._last_mid is not None:
             current_mid = self._last_mid
 
-            buffer = getattr(self, "_tp_sl_buffer_mult", 0.0005)
+            buffer = self._tp_sl_buffer_mult
 
             if order_side == OrderSide.BUY:  # Closing SHORT position
                 # SL should be ABOVE current market to trigger on upward move
@@ -2110,6 +2155,8 @@ class HedgeGridV1(Strategy):
         """
         # Cache queries and calculations are safe without locks
         return {
+            # Account balance
+            "account_balance_usdt": self._get_account_balance(),
             # Position metrics
             "long_inventory_usdt": self._calculate_inventory("long"),
             "short_inventory_usdt": self._calculate_inventory("short"),
@@ -2314,6 +2361,19 @@ class HedgeGridV1(Strategy):
 
         return active_rungs
 
+    def _get_account_balance(self) -> float:
+        """Get current total account balance in USDT."""
+        try:
+            account = self.portfolio.account(self._venue)
+            if account is None:
+                return 0.0
+            from nautilus_trader.model.objects import Currency
+
+            base_currency = Currency.from_str("USDT")
+            return float(account.balance_total(base_currency))
+        except Exception:
+            return 0.0
+
     def _get_margin_ratio(self) -> float:
         """Get current margin ratio from account (margin_used / total_balance)."""
         try:
@@ -2321,7 +2381,7 @@ class HedgeGridV1(Strategy):
             if account is None:
                 return 0.0
 
-            from nautilus_trader.model.identifiers import Currency
+            from nautilus_trader.model.objects import Currency
 
             base_currency = Currency.from_str("USDT")
             total_balance = float(account.balance_total(base_currency))
@@ -2492,7 +2552,7 @@ class HedgeGridV1(Strategy):
         compromise trading safety. It cancels all orders and sets flags
         to prevent further trading.
         """
-        self.log.critical("CRITICAL ERROR - Entering safe mode")
+        self.log.error("CRITICAL ERROR - Entering safe mode")
 
         # Set flags to stop trading
         self._critical_error = True
@@ -2508,7 +2568,7 @@ class HedgeGridV1(Strategy):
             self.log.error(f"Failed to cancel orders during critical error handling: {e}")
 
         # Log state for debugging
-        self.log.critical("Critical error handler complete. Trading paused. Manual intervention required.")
+        self.log.error("Critical error handler complete. Trading paused. Manual intervention required.")
 
     def _validate_order_size(self, order, side: Side) -> bool:
         """
@@ -2536,7 +2596,7 @@ class HedgeGridV1(Strategy):
                 return False
 
             # Get total balance
-            from nautilus_trader.model.identifiers import Currency
+            from nautilus_trader.model.objects import Currency
 
             base_currency = Currency.from_str("USDT")
             total_balance = float(account.balance_total(base_currency))
@@ -2614,7 +2674,7 @@ class HedgeGridV1(Strategy):
         max_errors = rm_cfg.max_errors_per_minute if rm_cfg else 10
 
         if len(self._error_window) >= max_errors:
-            self.log.critical(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
+            self.log.error(f"Circuit breaker activated - {len(self._error_window)} errors in last minute")
             self._circuit_breaker_active = True
 
             # Cancel all orders
@@ -2645,7 +2705,7 @@ class HedgeGridV1(Strategy):
                 return
 
             # Get current balance
-            from nautilus_trader.model.identifiers import Currency
+            from nautilus_trader.model.objects import Currency
 
             base_currency = Currency.from_str("USDT")
             current_balance = float(account.balance_total(base_currency))
@@ -2667,7 +2727,7 @@ class HedgeGridV1(Strategy):
                 max_drawdown_pct = rm_cfg.max_drawdown_pct if rm_cfg else 20.0
 
                 if drawdown_pct > max_drawdown_pct and not self._drawdown_protection_triggered:
-                    self.log.critical(
+                    self.log.error(
                         f"Max drawdown exceeded: {drawdown_pct:.2f}% > {max_drawdown_pct:.2f}% "
                         f"(peak: {self._peak_balance:.2f}, current: {current_balance:.2f})"
                     )
@@ -2680,7 +2740,7 @@ class HedgeGridV1(Strategy):
                     self._pause_trading = True
 
         except Exception as e:
-            self.log.critical(f"Drawdown check FAILED - pausing trading as safety precaution: {e}")
+            self.log.error(f"Drawdown check FAILED - pausing trading as safety precaution: {e}")
             self._pause_trading = True
 
     def _flatten_all_positions(self) -> None:

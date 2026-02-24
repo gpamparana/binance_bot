@@ -86,8 +86,12 @@ class KillSwitchConfig(BaseModel):
     def validate_drawdown(cls, v: float) -> float:
         """Warn if drawdown threshold is too aggressive."""
         if v > 20.0:
-            # Log warning but allow (user may have specific risk tolerance)
-            pass
+            import warnings
+
+            warnings.warn(
+                f"High drawdown threshold ({v}%) configured. This may result in large losses.",
+                stacklevel=2,
+            )
         return v
 
     @field_validator("max_margin_ratio")

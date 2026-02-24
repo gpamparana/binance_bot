@@ -825,7 +825,7 @@ def test_diff_idempotent_after_precision_boundary_change() -> None:
     diff = OrderDiff("HG1", guard, price_tolerance_bps=20.0)
 
     # Initial desired
-    rungs = [Rung(price=100.05, qty=0.5, side=Side.LONG)]  # Clamps to 100.0
+    rungs = [Rung(price=100.05, qty=0.5, side=Side.LONG)]  # Clamps to 100.1 (ROUND_HALF_UP)
     ladder = Ladder.from_list(Side.LONG, rungs)
 
     # Create initial order
@@ -833,11 +833,11 @@ def test_diff_idempotent_after_precision_boundary_change() -> None:
     result1 = diff.diff([ladder], live)
     live = convert_intents_to_live_orders(list(result1.adds))
 
-    # Should have clamped to 100.0
-    assert live[0].price == pytest.approx(100.0)
+    # Should have clamped to 100.1 (Decimal ROUND_HALF_UP: 100.05/0.1 = 1000.5 → 1001 → 100.1)
+    assert live[0].price == pytest.approx(100.1)
 
-    # Change desired slightly (still clamps to 100.0)
-    rungs2 = [Rung(price=100.08, qty=0.5, side=Side.LONG)]  # Still clamps to 100.0
+    # Change desired slightly (still clamps to 100.1)
+    rungs2 = [Rung(price=100.08, qty=0.5, side=Side.LONG)]  # Still clamps to 100.1
     ladder2 = Ladder.from_list(Side.LONG, rungs2)
 
     # Should not produce operations (same clamped value)

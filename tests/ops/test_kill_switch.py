@@ -33,6 +33,7 @@ def mock_strategy():
     # Default metrics (healthy state)
     strategy.get_operational_metrics.return_value = {
         "total_pnl_usdt": 0.0,
+        "account_balance_usdt": 10000.0,
         "long_inventory_usdt": 1000.0,
         "short_inventory_usdt": 1000.0,
         "funding_cost_1h_projected_usdt": 0.5,
@@ -41,14 +42,30 @@ def mock_strategy():
         "unrealized_pnl_usdt": 0.0,
     }
 
-    # Mock flatten_side to return result
-    strategy.flatten_side.return_value = {
+    # Mock flatten_side: return result and zero out inventory for post-flatten verification
+    flat_result = {
         "cancelled_orders": 5,
         "closing_positions": [
             {"side": "long", "size": 0.5, "order_id": "test-1"},
             {"side": "short", "size": 0.3, "order_id": "test-2"},
         ],
     }
+
+    def _flatten_and_zero(side):
+        # After flatten, verification calls should see zero inventory
+        strategy.get_operational_metrics.return_value = {
+            "total_pnl_usdt": 0.0,
+            "account_balance_usdt": 10000.0,
+            "long_inventory_usdt": 0.0,
+            "short_inventory_usdt": 0.0,
+            "funding_cost_1h_projected_usdt": 0.0,
+            "margin_ratio": 0.0,
+            "realized_pnl_usdt": 0.0,
+            "unrealized_pnl_usdt": 0.0,
+        }
+        return flat_result
+
+    strategy.flatten_side.side_effect = _flatten_and_zero
 
     return strategy
 
@@ -274,24 +291,68 @@ class TestCircuitBreakers:
     """Tests for circuit breaker logic."""
 
     def test_drawdown_circuit_breaker(self, kill_switch, mock_strategy, mock_alert_manager):
-        """Test drawdown circuit breaker triggers."""
-        # Set metrics showing drawdown exceeding threshold
+        """Test drawdown circuit breaker triggers using account balance as denominator."""
+        # Account balance = 10000, peak PnL = 1000, current = -60
+        # Drawdown amount = 1000 - (-60) = 1060
+        # Drawdown % = 1060 / 10000 * 100 = 10.6% (exceeds 5% threshold)
         mock_strategy.get_operational_metrics.return_value = {
-            "total_pnl_usdt": -60.0,  # 6% drawdown from peak of 1000
+            "total_pnl_usdt": -60.0,
+            "account_balance_usdt": 10000.0,
             "long_inventory_usdt": 1000.0,
             "short_inventory_usdt": 1000.0,
             "funding_cost_1h_projected_usdt": 0.5,
             "margin_ratio": 0.3,
         }
 
-        # Set peak PnL
+        # Set initial balance and peak PnL
+        kill_switch._initial_account_balance = 10000.0
         kill_switch._session_peak_pnl = 1000.0
 
         # Trigger circuit check
         kill_switch._check_drawdown_circuit(mock_strategy.get_operational_metrics())
 
-        # Should trigger flatten (circuit breaker threshold is 5%)
-        # Note: This test verifies the logic, actual flatten triggered in monitoring loop
+        # Should trigger flatten (10.6% > 5% threshold)
+        assert mock_strategy.flatten_side.called
+
+    def test_drawdown_uses_account_balance_not_pnl_peak(self, kill_switch, mock_strategy):
+        """Test that drawdown is calculated vs account balance, not PnL peak."""
+        # Scenario: small PnL peak ($100), $50 loss from peak
+        # Old behavior: 50/100 = 50% drawdown (wrong, overly sensitive)
+        # New behavior: 50/10000 = 0.5% drawdown (correct, relative to account)
+        kill_switch._initial_account_balance = 10000.0
+        kill_switch._session_peak_pnl = 100.0
+
+        mock_strategy.get_operational_metrics.return_value = {
+            "total_pnl_usdt": 50.0,  # Down $50 from peak of $100
+            "account_balance_usdt": 10000.0,
+            "long_inventory_usdt": 1000.0,
+            "short_inventory_usdt": 1000.0,
+            "funding_cost_1h_projected_usdt": 0.5,
+            "margin_ratio": 0.3,
+        }
+
+        kill_switch._check_drawdown_circuit(mock_strategy.get_operational_metrics())
+
+        # 0.5% drawdown should NOT trigger 5% threshold
+        assert not mock_strategy.flatten_side.called
+
+    def test_drawdown_zero_balance_skips(self, kill_switch, mock_strategy):
+        """Test that zero account balance does not cause division by zero."""
+        kill_switch._initial_account_balance = 0.0
+        kill_switch._session_peak_pnl = 1000.0
+
+        mock_strategy.get_operational_metrics.return_value = {
+            "total_pnl_usdt": -500.0,
+            "account_balance_usdt": 0.0,
+            "long_inventory_usdt": 1000.0,
+            "short_inventory_usdt": 1000.0,
+            "funding_cost_1h_projected_usdt": 0.5,
+            "margin_ratio": 0.3,
+        }
+
+        # Should not raise, should not trigger
+        kill_switch._check_drawdown_circuit(mock_strategy.get_operational_metrics())
+        assert not mock_strategy.flatten_side.called
 
     def test_funding_cost_circuit_breaker(self, kill_switch, mock_strategy):
         """Test funding cost circuit breaker triggers."""

@@ -378,3 +378,98 @@ policy:
     # Should contain helpful information about multiple errors
     assert "validation failed" in error_msg.lower()
     assert "Field:" in error_msg
+
+
+def test_risk_config_must_use_nested_access(tmp_path: Path) -> None:
+    """Regression test: risk values must be accessed via nested config, not root getattr.
+
+    The HedgeGridConfig uses nested Pydantic models for risk_management and position.
+    A common bug pattern is using getattr(config, "max_drawdown_pct", default) on the
+    root config object, which silently returns the default instead of the actual value.
+    The correct access pattern is config.risk_management.max_drawdown_pct.
+    """
+    config_file = tmp_path / "strategy.yaml"
+    config_file.write_text("""
+strategy:
+  name: hedge_grid_v1
+  instrument_id: BTCUSDT-PERP.BINANCE
+
+grid:
+  grid_step_bps: 25.0
+  grid_levels_long: 10
+  grid_levels_short: 10
+  base_qty: 0.001
+  qty_scale: 1.1
+
+exit:
+  tp_steps: 2
+  sl_steps: 8
+
+rebalance:
+  recenter_trigger_bps: 150.0
+  max_inventory_quote: 10000.0
+
+execution:
+  maker_only: true
+  use_post_only_retries: true
+  retry_attempts: 3
+  retry_delay_ms: 100
+
+funding:
+  funding_window_minutes: 480
+  funding_max_cost_bps: 10.0
+
+regime:
+  adx_len: 14
+  ema_fast: 12
+  ema_slow: 26
+  atr_len: 14
+  hysteresis_bps: 50.0
+
+position:
+  max_position_size: 1.0
+  max_leverage_used: 5.0
+  emergency_liquidation_buffer: 0.15
+  max_position_pct: 0.80
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 3
+  counter_qty_scale: 0.5
+
+risk_management:
+  max_drawdown_pct: 15.0
+  max_errors_per_minute: 5
+  circuit_breaker_cooldown_seconds: 120
+  enable_drawdown_protection: true
+  enable_circuit_breaker: true
+  enable_position_validation: true
+""")
+
+    config = HedgeGridConfigLoader.load(config_file)
+
+    # -----------------------------------------------------------
+    # CORRECT nested access: returns actual configured values
+    # -----------------------------------------------------------
+    assert config.risk_management is not None
+    assert config.risk_management.max_drawdown_pct == 15.0
+    assert config.risk_management.max_errors_per_minute == 5
+    assert config.risk_management.circuit_breaker_cooldown_seconds == 120
+    assert config.position.max_position_pct == 0.80
+
+    # -----------------------------------------------------------
+    # BUG PATTERN: getattr on root config returns the fallback default,
+    # NOT the actual configured value. This is because these fields live
+    # under nested sub-models, not on the root HedgeGridConfig.
+    # -----------------------------------------------------------
+    # max_drawdown_pct lives under risk_management, not root
+    assert getattr(config, "max_drawdown_pct", 20.0) == 20.0  # returns default!
+    assert getattr(config, "max_drawdown_pct", 20.0) != 15.0  # NOT the real value
+
+    # max_position_pct lives under position, not root
+    assert getattr(config, "max_position_pct", 0.95) == 0.95  # returns default!
+    assert getattr(config, "max_position_pct", 0.95) != 0.80  # NOT the real value
+
+    # max_errors_per_minute lives under risk_management, not root
+    assert getattr(config, "max_errors_per_minute", 10) == 10  # returns default!
+    assert getattr(config, "max_errors_per_minute", 10) != 5  # NOT the real value

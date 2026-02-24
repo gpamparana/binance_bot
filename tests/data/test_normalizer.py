@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from naut_hedgegrid.data.pipelines.normalizer import (
+    _detect_gaps,
     _normalize_timestamp,
     normalize_funding_rates,
     normalize_mark_prices,

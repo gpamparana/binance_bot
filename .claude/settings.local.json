@@ -42,7 +42,9 @@
       "Bash(find:*)",
       "Bash(env:*)",
       "Bash(pgrep:*)",
-      "Bash(make format:*)"
+      "Bash(make format:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(make:*)"
     ],
     "deny": [],
     "ask": []

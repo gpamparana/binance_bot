@@ -212,7 +212,7 @@ class PrometheusExporter:
                     pass  # Suppress per-request logging
 
             app = make_wsgi_app(self.registry)
-            self._http_server = make_server("", port, app, handler_class=_QuietHandler)
+            self._http_server = make_server("127.0.0.1", port, app, handler_class=_QuietHandler)
 
             self.server_thread = threading.Thread(
                 target=self._http_server.serve_forever,

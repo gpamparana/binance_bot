@@ -111,6 +111,24 @@ class ExecutionConfig(BaseModel):
         le=50.0,
         description="Buffer in bps for adjusting TP/SL near market price (5.0 = 0.05%)",
     )
+    max_bar_staleness_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Maximum age of bar data in seconds before pausing order placement",
+    )
+    order_diff_price_tolerance_bps: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=50.0,
+        description="Price tolerance in basis points for order diff matching",
+    )
+    order_diff_qty_tolerance_pct: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=0.5,
+        description="Quantity tolerance as fraction for order diff matching",
+    )
 
 
 class FundingConfig(BaseModel):
@@ -171,8 +189,12 @@ class PositionConfig(BaseModel):
     def validate_leverage(cls, v: float) -> float:
         """Warn about high leverage usage."""
         if v > 20:
-            # Note: This is a warning, not an error. High leverage is risky but allowed.
-            pass
+            import warnings
+
+            warnings.warn(
+                f"High leverage ({v}x) configured. Ensure risk controls are appropriate.",
+                stacklevel=2,
+            )
         return v
 
     @field_validator("emergency_liquidation_buffer")
@@ -209,7 +231,7 @@ class RiskManagementConfig(BaseModel):
         default=10,
         ge=1,
         le=100,
-        description="Maximum errors allowed per minute before circuit breaker activates",
+        description="Maximum errors allowed per circuit_breaker_window_seconds window",
     )
     circuit_breaker_cooldown_seconds: int = Field(
         default=300,
@@ -261,7 +283,7 @@ class HedgeGridConfig(BaseModel):
     regime: RegimeConfig = Field(description="Regime detection")
     position: PositionConfig = Field(description="Position sizing")
     policy: PolicyConfig = Field(description="Placement policy for inventory biasing")
-    risk_management: RiskManagementConfig | None = Field(
+    risk_management: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,
         description="Advanced risk management and circuit breaker settings",
     )

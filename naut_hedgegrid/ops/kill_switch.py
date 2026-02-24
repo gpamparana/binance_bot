@@ -7,6 +7,7 @@ real-time protection of capital with thread-safe operation.
 
 import logging
 import threading
+import time
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -91,6 +92,7 @@ class KillSwitch:
         self._session_start_time = datetime.now(tz=UTC)
         self._session_start_pnl = 0.0
         self._session_peak_pnl = 0.0
+        self._initial_account_balance: float = 0.0
 
         # Daily tracking
         self._daily_reset_time = self._get_next_daily_reset()
@@ -136,6 +138,11 @@ class KillSwitch:
             self._session_peak_pnl = self._session_start_pnl
             self._daily_start_pnl = self._session_start_pnl
             self._daily_peak_pnl = self._session_start_pnl
+            self._initial_account_balance = metrics.get("account_balance_usdt", 0.0)
+            if self._initial_account_balance <= 0:
+                self.logger.warning(
+                    "Account balance unavailable or zero — drawdown percentage calculation may be inaccurate"
+                )
         except Exception as e:
             self.logger.warning(f"Failed to initialize PnL tracking: {e}")
 
@@ -241,6 +248,42 @@ class KillSwitch:
                     positions_closed=result["closing_positions"],
                 )
 
+            # Post-flatten verification: confirm positions are actually closed
+            verified = False
+            for attempt in range(3):
+                time.sleep(2)
+                try:
+                    metrics = self.strategy.get_operational_metrics()
+                    long_inv = metrics.get("long_inventory_usdt", 0.0)
+                    short_inv = metrics.get("short_inventory_usdt", 0.0)
+                    if side == "long":
+                        remaining = long_inv
+                    elif side == "short":
+                        remaining = short_inv
+                    else:
+                        remaining = long_inv + short_inv
+                    if remaining < 1.0:
+                        self.logger.info(
+                            f"Flatten verified: remaining inventory ${remaining:.2f} (attempt {attempt + 1}/3)"
+                        )
+                        verified = True
+                        break
+                    self.logger.warning(
+                        f"Flatten verification attempt {attempt + 1}/3: remaining inventory ${remaining:.2f}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Flatten verification attempt {attempt + 1}/3 failed: {e}")
+
+            if not verified:
+                result["status"] = "completed_unverified"
+                self.logger.error("Flatten verification failed after 3 attempts — positions may still be open")
+                if self.alert_manager:
+                    self.alert_manager.send_alert(
+                        message="Flatten verification FAILED: positions may still be open",
+                        severity=AlertSeverity.CRITICAL,
+                        extra_data={"reason": reason, "side": side},
+                    )
+
             return result
 
         except Exception as e:
@@ -320,11 +363,12 @@ class KillSwitch:
 
         self._daily_peak_pnl = max(current_pnl, self._daily_peak_pnl)
 
-        # Calculate session drawdown
+        # Calculate session drawdown (normalized to account balance, not PnL peak)
         session_drawdown_amount = self._session_peak_pnl - current_pnl
-        session_drawdown_pct = (
-            (session_drawdown_amount / abs(self._session_peak_pnl)) * 100 if abs(self._session_peak_pnl) > 0 else 0.0
-        )
+        if self._initial_account_balance <= 0:
+            session_drawdown_pct = 0.0
+        else:
+            session_drawdown_pct = (session_drawdown_amount / self._initial_account_balance) * 100
 
         # Check session drawdown threshold
         if session_drawdown_pct > self.config.max_drawdown_pct:
@@ -336,12 +380,13 @@ class KillSwitch:
             )
             return
 
-        # Calculate daily drawdown if enabled
+        # Calculate daily drawdown if enabled (also normalized to account balance)
         if self.config.daily_loss_limit_usdt is not None:
             daily_drawdown_amount = self._daily_peak_pnl - current_pnl
-            daily_drawdown_pct = (
-                (daily_drawdown_amount / abs(self._daily_peak_pnl)) * 100 if abs(self._daily_peak_pnl) > 0 else 0.0
-            )
+            if self._initial_account_balance <= 0:
+                daily_drawdown_pct = 0.0
+            else:
+                daily_drawdown_pct = (daily_drawdown_amount / self._initial_account_balance) * 100
 
             if daily_drawdown_pct > self.config.max_drawdown_pct:
                 self._trigger_circuit_breaker(
@@ -450,12 +495,14 @@ class KillSwitch:
             unit: Unit of measurement (%, bps, USDT, etc.)
 
         """
-        # Check if already triggered (prevent duplicate triggers)
+        # Check if already triggered and mark as pending (prevent duplicate triggers)
         breaker_key = f"{breaker_type}_{datetime.now(tz=UTC).date()}"
         with self._lock:
             if breaker_key in self._circuit_breakers_triggered:
                 self.logger.debug(f"Circuit breaker {breaker_type} already triggered today")
                 return
+            # Mark as pending BEFORE releasing lock to prevent race condition
+            self._circuit_breakers_triggered.add(breaker_key)
 
         # Log circuit breaker trigger
         self.logger.critical(
@@ -477,13 +524,18 @@ class KillSwitch:
             f"{breaker_type} circuit breaker triggered "
             f"(current={current_value:.2f}{unit}, threshold={threshold:.2f}{unit})"
         )
-        result = self.flatten_now("both", reason)
-
-        # Only mark as triggered after successful flatten (allows retry on failure)
-        if result.get("status") == "completed":
+        try:
+            result = self.flatten_now("both", reason)
+        except Exception:
+            # Remove from triggered set on failure to allow retry
             with self._lock:
-                self._circuit_breakers_triggered.add(breaker_key)
-        else:
+                self._circuit_breakers_triggered.discard(breaker_key)
+            raise
+
+        # Remove from triggered set on failure to allow retry
+        if result.get("status") != "completed":
+            with self._lock:
+                self._circuit_breakers_triggered.discard(breaker_key)
             self.logger.warning(
                 f"Flatten failed for {breaker_type} circuit breaker "
                 f"(status={result.get('status')}), will retry on next check"

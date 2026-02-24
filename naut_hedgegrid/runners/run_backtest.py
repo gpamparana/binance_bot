@@ -297,8 +297,13 @@ class BacktestRunner:
                 }
                 account_type = account_type_map.get(venue_cfg.venue.account_type, AccountType.MARGIN)
 
-                # Determine OMS type based on hedge mode
-                oms_type = OmsType.HEDGING if venue_cfg.trading.hedge_mode else OmsType.NETTING
+                # Validate hedge mode (HedgeGridV1 requires it)
+                if not venue_cfg.trading.hedge_mode:
+                    raise ValueError(
+                        "HedgeGridV1 requires hedge_mode=true in venue config. "
+                        "Set trading.hedge_mode: true in your venue YAML."
+                    )
+                oms_type = OmsType.HEDGING
 
                 # Convert starting balances
                 starting_balances = []
@@ -313,6 +318,7 @@ class BacktestRunner:
                     account_type=account_type,
                     starting_balances=starting_balances,
                     base_currency=None,  # Will use first balance currency
+                    trade_execution=False,  # Preserve pre-1.221.0 behavior (default changed to True)
                 )
                 self.console.print(
                     f"[green]✓[/green] Added venue: {venue.value} (oms={oms_type.name}, type={account_type.name})"
@@ -427,21 +433,15 @@ class BacktestRunner:
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
-        # Important: Properly dispose of the engine to ensure clean shutdown
-        # This ensures all pending log messages are flushed before continuing
-        import sys
-        import time
-
-        # Dispose the engine to trigger proper cleanup
-        engine.dispose()
-
         # Flush Python's stdout/stderr buffers
+        import sys
+
         sys.stdout.flush()
         sys.stderr.flush()
 
-        # Give any remaining async operations time to complete
-        # NautilusTrader uses internal async logging that may still be processing
-        time.sleep(1.0)  # Increased delay to ensure all logs are flushed
+        # NOTE: engine.dispose() is NOT called here because callers need to
+        # access engine.cache and engine.portfolio in extract_results().
+        # Callers should dispose the engine after they finish extracting results.
 
         self.console.print(f"[green]✓[/green] Backtest completed in {duration:.2f}s\n")
 

@@ -9,6 +9,7 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
+from naut_hedgegrid.ops.alerts import AlertManager
 from naut_hedgegrid.ops.prometheus import PrometheusExporter
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class OperationsManager:
         api_port: int = 8080,
         api_key: str | None = None,
         ops_config: Any | None = None,
+        require_live_safety: bool = False,
     ) -> None:
         self.strategy = strategy
         self.instrument_id = instrument_id
@@ -54,6 +56,7 @@ class OperationsManager:
         self.api_port = api_port
         self.api_key = api_key
         self._ops_config = ops_config  # OperationsConfig or None
+        self._require_live_safety = require_live_safety
         self.is_running = False
 
         self._prometheus: PrometheusExporter | None = None
@@ -115,16 +118,37 @@ class OperationsManager:
                 f"max_margin={kill_switch_config.max_margin_ratio:.0%}"
             )
 
+            # Build AlertManager from ops config if available and enabled
+            alert_manager = None
+            if (
+                self._ops_config is not None
+                and isinstance(self._ops_config, OperationsConfig)
+                and self._ops_config.alerts.enabled
+            ):
+                alert_manager = AlertManager(config=self._ops_config.alerts)
+                channels = []
+                if self._ops_config.alerts.has_slack_configured():
+                    channels.append("Slack")
+                if self._ops_config.alerts.has_telegram_configured():
+                    channels.append("Telegram")
+                if channels:
+                    logger.info(f"AlertManager configured with channels: {', '.join(channels)}")
+                else:
+                    logger.warning("AlertManager enabled but no channels configured")
+
             self._kill_switch = KillSwitch(
                 strategy=self.strategy,
                 config=kill_switch_config,
-                alert_manager=None,
+                alert_manager=alert_manager,
             )
             self._kill_switch.start_monitoring()
             if hasattr(self.strategy, "attach_kill_switch"):
                 self.strategy.attach_kill_switch(self._kill_switch)
             logger.info("Kill switch monitoring started")
         except Exception as e:
+            if self._require_live_safety:
+                logger.critical(f"Kill switch failed to start in live mode: {e}")
+                raise RuntimeError(f"Kill switch required for live trading but failed to start: {e}") from e
             logger.warning(f"Kill switch failed to start: {e}. Continuing without kill switch.")
             self._kill_switch = None
 

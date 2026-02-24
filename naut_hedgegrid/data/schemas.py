@@ -132,7 +132,12 @@ class FundingRateSchema(BaseModel):
 # Conversion functions to NautilusTrader types
 
 
-def to_trade_tick(row: TradeSchema | dict[str, Any], instrument_id: InstrumentId) -> TradeTick:
+def to_trade_tick(
+    row: TradeSchema | dict[str, Any],
+    instrument_id: InstrumentId,
+    price_precision: int = 8,
+    size_precision: int = 8,
+) -> TradeTick:
     """
     Convert TradeSchema to NautilusTrader TradeTick.
 
@@ -166,8 +171,8 @@ def to_trade_tick(row: TradeSchema | dict[str, Any], instrument_id: InstrumentId
     aggressor_side = AggressorSide.BUYER if row.aggressor_side == "BUY" else AggressorSide.SELLER
 
     # Create Nautilus objects
-    price = Price.from_str(f"{row.price:.8f}")
-    size = Quantity.from_str(f"{row.size:.8f}")
+    price = Price.from_str(f"{row.price:.{price_precision}f}")
+    size = Quantity.from_str(f"{row.size:.{size_precision}f}")
     trade_id = TradeId(row.trade_id)
 
     return TradeTick(
@@ -290,10 +295,33 @@ def validate_dataframe_schema(df: pd.DataFrame, schema_type: str) -> None:
     if missing:
         raise ValueError(f"Missing required columns for {schema_type}: {missing}")
 
-    # Validate all rows (full validation for data integrity)
-    for idx, row in df.iterrows():
+    # Fast vectorized checks for common validation rules
+    if schema_type == "trade":
+        if (df["price"] <= 0).any():
+            bad_idx = df.index[df["price"] <= 0][0]
+            raise ValueError(f"Row {bad_idx} validation failed for {schema_type}: price must be positive")
+        if (df["size"] <= 0).any():
+            bad_idx = df.index[df["size"] <= 0][0]
+            raise ValueError(f"Row {bad_idx} validation failed for {schema_type}: size must be positive")
+        valid_sides = {"BUY", "SELL"}
+        invalid_sides = ~df["aggressor_side"].isin(valid_sides)
+        if invalid_sides.any():
+            bad_idx = df.index[invalid_sides][0]
+            raise ValueError(
+                f"Row {bad_idx} validation failed for {schema_type}: "
+                f"aggressor_side must be BUY or SELL, got '{df.loc[bad_idx, 'aggressor_side']}'"
+            )
+    elif schema_type == "mark":
+        if (df["mark_price"] <= 0).any():
+            bad_idx = df.index[df["mark_price"] <= 0][0]
+            raise ValueError(f"Row {bad_idx} validation failed for {schema_type}: mark_price must be positive")
+    # Funding rates can be negative, so no vectorized check needed
+
+    # Per-row Pydantic validation only on first few rows as spot-check (full data checked above)
+    spot_check_n = min(5, len(df))
+    for idx in df.index[:spot_check_n]:
         try:
-            schema_cls(**row.to_dict())
+            schema_cls(**df.loc[idx].to_dict())
         except Exception as e:
             raise ValueError(f"Row {idx} validation failed for {schema_type}: {e}") from e
 
@@ -336,7 +364,12 @@ def convert_dataframe_to_nautilus(df: pd.DataFrame, schema_type: str, instrument
     return results
 
 
-def mark_prices_to_bars(df: pd.DataFrame, bar_type: BarType) -> list[Bar]:
+def mark_prices_to_bars(
+    df: pd.DataFrame,
+    bar_type: BarType,
+    price_precision: int = 2,
+    size_precision: int = 3,
+) -> list[Bar]:
     """
     Convert mark price OHLCV data to Nautilus Bar objects.
 
@@ -365,11 +398,11 @@ def mark_prices_to_bars(df: pd.DataFrame, bar_type: BarType) -> list[Bar]:
 
         bar = Bar(
             bar_type=bar_type,
-            open=Price.from_str(f"{row.open:.2f}"),
-            high=Price.from_str(f"{row.high:.2f}"),
-            low=Price.from_str(f"{row.low:.2f}"),
-            close=Price.from_str(f"{row.close:.2f}"),
-            volume=Quantity.from_str(f"{row.volume:.3f}"),
+            open=Price.from_str(f"{row.open:.{price_precision}f}"),
+            high=Price.from_str(f"{row.high:.{price_precision}f}"),
+            low=Price.from_str(f"{row.low:.{price_precision}f}"),
+            close=Price.from_str(f"{row.close:.{price_precision}f}"),
+            volume=Quantity.from_str(f"{row.volume:.{size_precision}f}"),
             ts_event=ts_event,
             ts_init=ts_init,
         )

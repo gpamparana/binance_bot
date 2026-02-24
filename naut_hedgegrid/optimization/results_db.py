@@ -15,6 +15,10 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel
 
+# Register explicit datetime adapters to suppress Python 3.12+ deprecation warnings
+sqlite3.register_adapter(datetime, lambda val: val.isoformat())
+sqlite3.register_converter("timestamp", lambda s: datetime.fromisoformat(s.decode()))
+
 
 class OptimizationTrial(BaseModel):
     """Represents a single optimization trial."""

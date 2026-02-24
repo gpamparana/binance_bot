@@ -171,6 +171,7 @@ class BaseRunner(ABC):
         strategy_config_path: Path,
         hedge_grid_cfg: HedgeGridConfig,
         venue_cfg: VenueConfig,
+        require_warmup_success: bool = False,
     ) -> ImportableStrategyConfig:
         """Load strategy configuration for TradingNode.
 
@@ -185,6 +186,8 @@ class BaseRunner(ABC):
             Loaded hedge grid configuration
         venue_cfg : VenueConfig
             Venue configuration
+        require_warmup_success : bool
+            If True, pause trading on warmup failure (for live mode)
 
         Returns
         -------
@@ -214,6 +217,7 @@ class BaseRunner(ABC):
                 "oms_type": oms_type.value,
                 "enable_warmup": True,  # Enable regime detector warmup
                 "testnet": venue_cfg.api.testnet,  # Pass testnet flag for warmup API
+                "require_warmup_success": require_warmup_success,
             },
         )
 
@@ -465,8 +469,13 @@ class BaseRunner(ABC):
             instrument_id = hedge_grid_cfg.strategy.instrument_id
             self.console.print(f"[cyan]Instrument: {instrument_id}[/cyan]")
 
-            # Determine OMS type from venue config
-            oms_type = OmsType.HEDGING if venue_cfg.trading.hedge_mode else OmsType.NETTING
+            # Validate hedge mode is enabled (HedgeGridV1 requires it)
+            if not venue_cfg.trading.hedge_mode:
+                raise ValueError(
+                    "HedgeGridV1 requires hedge_mode=true in venue config. "
+                    "Set trading.hedge_mode: true in your venue YAML."
+                )
+            oms_type = OmsType.HEDGING
             self.console.print(f"[cyan]OMS Type: {oms_type.name}[/cyan]")
             self.console.print()
 
@@ -481,6 +490,7 @@ class BaseRunner(ABC):
                 strategy_config_path=strat_config_path,
                 hedge_grid_cfg=hedge_grid_cfg,
                 venue_cfg=venue_cfg,
+                require_warmup_success=require_api_keys,
             )
 
             # Create data client config with instrument subscription
@@ -556,12 +566,18 @@ class BaseRunner(ABC):
                             api_port=api_port,
                             api_key=api_key,
                             ops_config=hedge_grid_cfg.operations,
+                            require_live_safety=(type(self).__name__ == "LiveRunner"),
                         )
                         self.ops_manager.start()
                         self.console.print(
                             f"[green]✓[/green] Prometheus metrics: http://localhost:{prometheus_port}/metrics"
                         )
                         self.console.print(f"[green]✓[/green] FastAPI endpoints: http://localhost:{api_port}/docs")
+                        if api_key is None and require_api_keys:
+                            self.console.print(
+                                "[yellow]WARNING: No API key provided for operational endpoints. "
+                                "POST endpoints (flatten, throttle) will be blocked.[/yellow]"
+                            )
                         self.console.print()
 
                     except Exception as e:
@@ -698,14 +714,19 @@ class LiveRunner(BaseRunner):
         """
         return "LIVE-001"
 
-    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:  # noqa: ARG002
+    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
         """Display live trading warning.
 
         Parameters
         ----------
         venue_cfg : VenueConfig
-            Venue configuration (unused)
+            Venue configuration
         """
+        if venue_cfg.api.testnet:
+            raise ValueError(
+                "Testnet venue config detected in live runner. Use 'python -m naut_hedgegrid paper' for testnet."
+            )
+
         warning_panel = Panel(
             "[bold red]WARNING: LIVE TRADING WITH REAL FUNDS[/bold red]\n\n"
             "This mode will place REAL ORDERS on Binance Futures.\n"
