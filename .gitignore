@@ -213,3 +213,4 @@ summary.json
 config.json
 optimization_results.db
 *DS_Store*
+artifacts/strategy_state_ETHUSDT-PERP_BINANCE.json
