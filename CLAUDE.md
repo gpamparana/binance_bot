@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 naut-hedgegrid is a hedge-mode grid trading system built on NautilusTrader for Binance futures markets. The system implements adaptive grid trading with regime detection, funding rate management, and automated risk controls.
 
 **Key Technologies:**
-- **Trading Engine**: NautilusTrader >= 1.220.0 (event-driven backtesting and live trading)
+- **Python**: 3.12+
+- **Trading Engine**: NautilusTrader >= 1.223.0 (event-driven backtesting and live trading)
 - **Build System**: uv (fast Python package manager, NOT pip or poetry)
-- **Linting**: ruff (replaces black, flake8, isort)
+- **Linting**: ruff (replaces black, flake8, isort) with line-length 120
 - **Type Checking**: mypy with strict mode
 - **Configuration**: Pydantic v2 with YAML loading
 - **CLI**: typer with rich console output
@@ -132,20 +133,189 @@ python -m naut_hedgegrid.optimization.cli cleanup my_optimization \
 uv run python -m naut_hedgegrid backtest
 ```
 
+## Project Structure
+
+```
+naut_hedgegrid/
+├── __init__.py
+├── __main__.py
+├── cli.py
+├── adapters/
+│   └── binance_testnet_patch.py
+├── config/
+│   ├── base.py              # BaseYamlConfigLoader
+│   ├── backtest.py
+│   ├── operations.py
+│   ├── strategy.py
+│   └── venue.py
+├── data/
+│   ├── schemas.py
+│   ├── pipelines/
+│   │   ├── normalizer.py
+│   │   └── replay_to_parquet.py
+│   ├── scripts/
+│   │   └── generate_sample_data.py
+│   └── sources/
+│       ├── base.py
+│       ├── binance_source.py
+│       ├── csv_source.py
+│       ├── tardis_source.py
+│       └── websocket_source.py
+├── domain/
+│   └── types.py
+├── exchange/
+│   └── precision.py
+├── metrics/
+│   └── report.py
+├── ops/
+│   ├── alerts.py
+│   ├── kill_switch.py
+│   ├── manager.py
+│   └── prometheus.py
+├── optimization/
+│   ├── cli.py
+│   ├── constraints.py
+│   ├── objective.py
+│   ├── optimizer.py
+│   ├── parallel_runner.py
+│   ├── param_space.py
+│   └── results_db.py
+├── runners/
+│   ├── __main__.py
+│   ├── base_runner.py
+│   ├── run_backtest.py
+│   ├── run_live.py
+│   └── run_paper.py
+├── strategies/
+│   └── hedge_grid_v1/
+│       ├── config.py
+│       ├── exit_manager.py      # ExitManagerMixin
+│       ├── metrics.py           # MetricsMixin
+│       ├── ops_api.py           # OpsControlMixin
+│       ├── order_events.py      # OrderEventsMixin
+│       ├── order_executor.py    # OrderExecutionMixin
+│       ├── risk_manager.py      # RiskManagementMixin
+│       ├── state_persistence.py # StatePersistenceMixin
+│       └── strategy.py          # HedgeGridV1 (composes all mixins)
+├── strategy/
+│   ├── detector.py
+│   ├── funding_guard.py
+│   ├── grid.py
+│   ├── order_sync.py
+│   └── policy.py
+├── ui/
+│   └── api.py
+├── utils/
+│   └── yamlio.py
+└── warmup/
+    └── binance_warmer.py
+
+tests/
+├── config/
+│   └── test_config_loading.py
+├── data/
+│   ├── sources/
+│   │   ├── test_csv_source.py
+│   │   └── test_websocket_source.py
+│   ├── test_normalizer.py
+│   ├── test_pipeline.py
+│   ├── test_schemas.py
+│   └── test_schemas_property.py
+├── domain/
+│   └── test_types.py
+├── exchange/
+│   └── test_precision.py
+├── ops/
+│   ├── test_alerts.py
+│   ├── test_api.py
+│   ├── test_kill_switch.py
+│   └── test_prometheus.py
+├── optimization/
+│   ├── test_constraints.py
+│   ├── test_objective.py
+│   ├── test_param_space.py
+│   └── test_results_db.py
+├── strategy/
+│   ├── test_detector.py
+│   ├── test_funding_guard.py
+│   ├── test_grid.py
+│   ├── test_order_sync.py
+│   ├── test_policy.py
+│   ├── test_state_persistence.py
+│   └── test_strategy_smoke.py
+├── utils/
+│   └── test_yamlio.py
+├── test_ops_integration.py
+├── test_order_diff.py
+├── test_parity.py
+├── test_post_only_retry.py
+└── test_precision.py
+
+configs/
+├── backtest/
+│   └── btcusdt_mark_trades_funding.yaml
+├── optimization/
+│   └── default_optimization.yaml
+├── strategies/
+│   ├── hedge_grid_v1.yaml               # Primary config
+│   ├── hedge_grid_v1_production.yaml
+│   └── hedge_grid_v1_testnet.yaml
+└── venues/
+    ├── binance_futures.yaml
+    └── binance_futures_testnet.yaml
+
+examples/
+├── data_configs/
+│   ├── csv_source_config.json
+│   ├── sample_trades.csv
+│   └── websocket_source_config.json
+├── kill_switch_integration.py
+├── optimize_strategy.py
+├── paper_trade_with_warmup.py
+├── quick_backtest.ipynb
+└── verify_data_pipeline.py
+
+scripts/
+└── run_backtest_with_logs.sh
+```
+
+Root-level utility scripts: `run_optimization.py`, `run_optimization_overnight.py`, `debug_backtest.py`
+
 ## Architecture
 
 The system uses a **layered component architecture** with clear separation of concerns:
 
 ### 1. Strategy Layer (`naut_hedgegrid/strategies/`)
 
-Complete trading strategy implementations that orchestrate components below.
+Complete trading strategy implementations that orchestrate all components.
 
-- **HedgeGridV1** (`hedge_grid_v1/strategy.py`): Main strategy class
-  - Subclasses `nautilus_trader.trading.strategy.Strategy`
-  - Lifecycle: `on_start()` → `on_bar()` → `on_order_filled()` loop
-  - Orchestrates all components in correct order per bar
-  - Manages hedge mode positions (LONG/SHORT with position_id suffixes)
-  - Attaches TP/SL on fills as reduce-only orders
+**HedgeGridV1 Mixin Architecture** (`hedge_grid_v1/strategy.py`):
+
+The `HedgeGridV1` class was refactored from a monolithic class into 7 focused mixins for clarity and testability:
+
+```python
+class HedgeGridV1(
+    RiskManagementMixin,    # risk_manager.py    - Drawdown protection, circuit breaker, position validation
+    MetricsMixin,           # metrics.py         - Operational metrics, inventory, PnL tracking
+    OrderEventsMixin,       # order_events.py    - Order lifecycle callbacks, retry logic
+    OrderExecutionMixin,    # order_executor.py  - Order creation, diff execution pipeline
+    ExitManagerMixin,       # exit_manager.py    - TP/SL attachment, OCO-like cancellation
+    OpsControlMixin,        # ops_api.py         - Kill switch, flatten, throttle, ladder snapshots
+    StatePersistenceMixin,  # state_persistence.py - Atomic save/load of peak_balance, realized_pnl
+    Strategy,               # NautilusTrader base
+):
+```
+
+**Mixin responsibilities:**
+- `RiskManagementMixin`: Implements `_check_drawdown_limit()`, `_check_circuit_breaker()`, `_validate_order_size()`
+- `MetricsMixin`: Tracks inventory values, PnL, and exposes metrics for Prometheus
+- `OrderEventsMixin`: Handles `on_order_accepted()`, `on_order_canceled()`, `on_order_rejected()`, `on_order_denied()`
+- `OrderExecutionMixin`: Implements `_execute_diff()`, `_execute_add()`, `_execute_cancel()`, `_execute_replace()`
+- `ExitManagerMixin`: Attaches TP/SL reduce-only orders on fills, manages OCO-like cancellation
+- `OpsControlMixin`: Exposes flatten, set-throttle, and ladder snapshot operations to the REST API
+- `StatePersistenceMixin`: Atomically saves and loads `peak_balance` and `realized_pnl` across restarts
+
+**Strategy lifecycle**: `on_start()` → `on_bar()` → `on_order_filled()` loop
 
 ### 2. Component Layer (`naut_hedgegrid/strategy/`)
 
@@ -179,7 +349,7 @@ Reusable, composable strategy building blocks with pure functional interfaces:
 
 ### 3. Domain Layer (`naut_hedgegrid/domain/`)
 
-Core types and value objects:
+Core types and value objects (all defined in `types.py`):
 
 - **Side**: Enum for LONG/SHORT position sides
 - **Regime**: Enum for UP/DOWN/SIDEWAYS market states
@@ -191,57 +361,36 @@ Core types and value objects:
 ### 4. Exchange Adapter Layer (`naut_hedgegrid/exchange/`)
 
 - **PrecisionGuard** (`precision.py`): Enforces exchange requirements
-  - Rounds prices to tick size
-  - Rounds quantities to step size
+  - Rounds prices to tick size, quantities to step size
   - Validates minimum notional
   - Filters invalid rungs from ladders
+  - Applied inside OrderDiff before order submission
 
 ### 5. Configuration Layer (`naut_hedgegrid/config/`)
 
 Pydantic v2 models with YAML loading:
 
+- **BaseYamlConfigLoader** (`base.py`): Abstract loader with `${ENV_VAR}` interpolation
 - **HedgeGridConfig** (`strategy.py`): Main strategy configuration
   - Contains: grid, exit, rebalance, execution, funding, regime, position, policy, risk_management
   - **Important**: Risk values are nested under `position.*` and `risk_management.*` (e.g., `cfg.position.max_position_pct`, `cfg.risk_management.max_drawdown_pct`). Do NOT use `getattr()` on the root config object for these.
   - Loaded via `HedgeGridConfigLoader.load(path)`
-
-- **BacktestConfig** (`backtest.py`): Backtest run configuration
-  - Time range, data sources, venues, strategies, execution sim, risk controls
-
-- **VenueConfig** (`venue.py`): Exchange connection settings
-  - API credentials, hedge mode, leverage, rate limits
+- **BacktestConfig** (`backtest.py`): Time range, data sources, venues, strategies, execution sim
+- **VenueConfig** (`venue.py`): API credentials, hedge mode, leverage, rate limits
+- **OperationsConfig** (`operations.py`): Kill switch thresholds, alert channels, Prometheus/API ports
 
 ### 6. Runner Layer (`naut_hedgegrid/runners/`)
 
 CLI-driven execution:
 
-- **BaseRunner** (`base_runner.py`): Abstract base with common logic
-  - Environment validation
-  - Nautilus node configuration
-  - Strategy warmup orchestration
-  - Operations manager integration
-
-- **BacktestRunner** (`run_backtest.py`): Orchestrates backtests
-  - Loads data from Parquet catalog
-  - Configures Nautilus BacktestEngine
-  - Runs simulation and extracts results
-  - Saves artifacts (JSON + CSV)
-
-- **PaperRunner** (`run_paper.py`): Paper trading execution
-  - Connects to real market data
-  - Simulates order fills
-  - No real money at risk
-
-- **LiveRunner** (`run_live.py`): Live trading execution
-  - Connects to exchange with execution enabled
-  - Places real orders with real money
-  - Requires API credentials
+- **BaseRunner** (`base_runner.py`): Abstract base — environment validation, Nautilus node config, warmup orchestration, ops manager integration
+- **BacktestRunner** (`run_backtest.py`): Loads Parquet catalog, configures BacktestEngine, saves artifacts (JSON + CSV)
+- **PaperRunner** (`run_paper.py`): Connects to real market data, simulates fills, no real money
+- **LiveRunner** (`run_live.py`): Connects to exchange with execution enabled, places real orders
 
 ### 7. Metrics Layer (`naut_hedgegrid/metrics/`)
 
-Performance analysis:
-
-- **PerformanceMetrics** (`report.py`): 32 metrics across 7 categories
+- **PerformanceMetrics / ReportGenerator** (`report.py`): 32 metrics across 7 categories
   - Returns: total PnL, annualized return, CAGR
   - Risk: Sharpe, Sortino, Calmar, volatility
   - Drawdown: max, average, recovery time
@@ -250,166 +399,84 @@ Performance analysis:
   - Funding: paid/received/net
   - Ladder utilization: depth, fill rate
 
-- **ReportGenerator** (`report.py`): Calculates metrics from backtest results
-
 ### 8. Data Pipeline Layer (`naut_hedgegrid/data/`)
 
 Complete data ingestion system for building Parquet catalogs:
 
-- **schemas.py**: Pydantic schemas + Nautilus converters
-  - TradeSchema → TradeTick
-  - MarkPriceSchema → Custom parquet
-  - FundingRateSchema → Custom parquet
+- **schemas.py**: Pydantic schemas + Nautilus converters (TradeSchema, MarkPriceSchema, FundingRateSchema)
+- **sources/**: DataSource adapters — Tardis.dev, Binance API, CSV, WebSocket JSONL
+- **pipelines/**: `normalizer.py` (timestamp conversion, deduplication), `replay_to_parquet.py` (main orchestrator)
+- **scripts/**: `generate_sample_data.py`
 
-- **sources/**: Data source adapters
-  - `base.py`: Abstract DataSource interface
-  - `tardis_source.py`: Tardis.dev API integration
-  - `csv_source.py`: CSV file reader with auto-mapping
-  - `websocket_source.py`: JSONL WebSocket replay
-  - `binance_source.py`: Direct Binance API integration
-
-- **pipelines/**: Data processing
-  - `normalizer.py`: Timestamp conversion, validation, cleaning
-  - `replay_to_parquet.py`: Main pipeline orchestrator
-
-- **scripts/**: Utilities
-  - `generate_sample_data.py`: Sample data generator
-
-**Key Features:**
-- Multiple data sources (Tardis.dev, CSV, WebSocket captures)
-- Strict schema validation with Pydantic
-- Automatic normalization and deduplication
-- Daily partitioning for efficient storage
-- Rich CLI with progress bars
+Output catalog structure:
+```
+data/catalog/
+├── BTCUSDT-PERP.BINANCE/
+│   ├── trade_tick.parquet
+│   ├── mark_price.parquet
+│   └── funding_rate.parquet
+└── instruments.parquet
+```
 
 ### 9. Operational Controls Layer (`naut_hedgegrid/ops/`)
 
 Production-grade monitoring and control infrastructure:
 
-- **kill_switch.py**: Automated circuit breakers
-  - Max drawdown triggers
-  - Position size limits
-  - Funding cost thresholds
-  - Automatic position flattening
+- **kill_switch.py**: Automated circuit breakers — max drawdown, position size limits, funding cost thresholds, margin ratio. When triggered: cancel all orders, close positions, send alerts.
+- **alerts.py**: Multi-channel notifications — Slack webhooks, Telegram bot, console/file logging
+- **prometheus.py**: 15 key metrics in standard Prometheus format
+- **manager.py**: `OperationsManager` — starts/stops kill switch, Prometheus server, FastAPI server together
 
-- **alerts.py**: Multi-channel notifications
-  - Slack integration
-  - Telegram bot support
-  - Email alerts (planned)
-  - Configurable alert levels
-
-- **prometheus.py**: Metrics export
-  - 15 key metrics exposed
-  - Position, grid, risk, funding, PnL metrics
-  - Standard Prometheus format
-  - Integration with Grafana dashboards
-
-**15 Key Metrics:**
-- Position: long_inventory_usdt, short_inventory_usdt, net_inventory_usdt
-- Grid: active_rungs_long, active_rungs_short, open_orders
-- Risk: margin_ratio, maker_ratio
-- Funding: funding_rate_current, funding_cost_1h_projected_usdt
-- PnL: realized_pnl_usdt, unrealized_pnl_usdt, total_pnl_usdt
-- Health: uptime_seconds, last_bar_timestamp
+**15 Key Prometheus Metrics:**
+- Position: `long_inventory_usdt`, `short_inventory_usdt`, `net_inventory_usdt`
+- Grid: `active_rungs_long`, `active_rungs_short`, `open_orders`
+- Risk: `margin_ratio`, `maker_ratio`
+- Funding: `funding_rate_current`, `funding_cost_1h_projected_usdt`
+- PnL: `realized_pnl_usdt`, `unrealized_pnl_usdt`, `total_pnl_usdt`
+- Health: `uptime_seconds`, `last_bar_timestamp`
 
 ### 10. UI/API Layer (`naut_hedgegrid/ui/`)
 
-FastAPI control endpoints for live operations:
+FastAPI control endpoints for live operations (`api.py`):
 
-- **api.py**: REST API for operational commands
-  - `GET /health`: Health check
-  - `GET /status`: Comprehensive status
-  - `POST /flatten`: Emergency position closure
-  - `POST /set-throttle`: Adjust aggressiveness
-  - `GET /ladders`: Grid ladder snapshot
-  - `GET /orders`: Open orders list
-  - `POST /start`: Start trading (stub)
-  - `POST /stop`: Stop trading (stub)
+- `GET /health` - Health check
+- `GET /api/v1/status` - Full strategy status
+- `POST /api/v1/flatten/{side}` - Flatten positions (LONG/SHORT/BOTH)
+- `POST /api/v1/set-throttle` - Adjust strategy aggressiveness
+- `GET /api/v1/ladders` - Current grid state
+- `GET /api/v1/orders` - Open orders
 
-**Authentication:** Optional API key via `X-API-Key` header
+**Authentication:** Optional API key via `X-API-Key` header. Swagger docs at `http://localhost:8080/docs`.
 
 ### 11. Adapters Layer (`naut_hedgegrid/adapters/`)
 
-Exchange-specific patches and workarounds:
-
-- **binance_testnet_patch.py**: Binance testnet compatibility fixes
-  - Instrument provider patches
-  - Endpoint corrections
-  - Testnet-specific configurations
+- **binance_testnet_patch.py**: Binance testnet compatibility fixes — instrument provider patches, endpoint corrections
 
 ### 12. Warmup Module (`naut_hedgegrid/warmup/`)
 
-Data warmup for live trading strategies:
-
-- **binance_warmer.py**: BinanceDataWarmer class
-  - Fetches historical klines from Binance API
-  - Converts to NautilusTrader Bar objects
-  - Provides DetectorBar format for regime detector
+- **BinanceDataWarmer** (`binance_warmer.py`): Fetches historical klines from Binance API, converts to NautilusTrader Bar objects, provides DetectorBar format for regime detector
   - Automatic endpoint selection (testnet vs production)
-  - Rate-limited API calls with pagination
+  - Default: 70 bars fetched (50 for EMA slow + 20 buffer for ADX/ATR)
+  - Startup overhead: 2-5 seconds typical; non-blocking (strategy starts even if warmup fails)
 
 **Integration:**
 - `BaseRunner._warmup_strategy()`: Automatic warmup after initialization
 - `HedgeGridV1.warmup_regime_detector()`: Feeds historical bars to detector
-- Default: 70 bars fetched (50 for EMA slow + 20 buffer for ADX/ATR)
-
-**Performance:**
-- Startup overhead: 2-5 seconds typical
-- Non-blocking: Strategy starts even if warmup fails
-- API calls: 1-2 requests for 70 bars
 
 ### 13. Utilities Layer (`naut_hedgegrid/utils/`)
 
-Common utilities and helpers:
-
-- Configuration loading utilities
-- Logging helpers
-- Time and date utilities
-- Mathematical helpers
+- **yamlio.py**: YAML loading with `${ENV_VAR}` interpolation support
 
 ### 14. Optimization Framework (`naut_hedgegrid/optimization/`)
 
 Bayesian hyperparameter optimization using Optuna:
 
-- **StrategyOptimizer** (`optimizer.py`): Main orchestrator
-  - Coordinates all optimization components
-  - Runs trials with parameter sampling
-  - Saves best configs to YAML files
-  - Exports results to CSV
-
-- **ParameterSpace** (`param_space.py`): Defines 17 tunable parameters
-  - Grid parameters (5): `grid_step_bps`, `grid_levels_long`, `grid_levels_short`, `base_qty`, `qty_scale`
-  - Exit parameters (2): `tp_steps`, `sl_steps`
-  - Regime parameters (5): `adx_len`, `ema_fast`, `ema_slow`, `atr_len`, `hysteresis_bps`
-  - Policy parameters (2): `counter_levels`, `counter_qty_scale`
-  - Rebalance parameters (1): `recenter_trigger_bps`
-  - Funding parameters (1): `funding_max_cost_bps`
-  - Position parameters (1): `max_position_pct`
-
-- **MultiObjectiveFunction** (`objective.py`): Weighted scoring
-  - Sharpe ratio (0.35 weight)
-  - Profit factor (0.30 weight)
-  - Calmar ratio (0.35 weight)
-  - Drawdown penalty (-0.20 weight)
-  - Adaptive normalization across trials
-
-- **ConstraintsValidator** (`constraints.py`): Hard constraint filtering
-  - Minimum Sharpe ratio (default 1.0)
-  - Maximum drawdown (default 20%)
-  - Minimum trades (default 50)
-  - Minimum win rate (default 45%)
-  - Minimum profit factor (default 1.1)
-  - Minimum Calmar ratio (default 0.5)
-
-- **ParallelBacktestRunner** (`parallel_runner.py`): Concurrent execution
-  - Multi-process backtest execution
-  - Configurable job count (`n_jobs`)
-
-- **OptimizationResultsDB** (`results_db.py`): SQLite persistence
-  - Stores trial parameters and metrics
-  - Query best trials
-  - Export to CSV
-  - Cleanup low-performing trials
+- **StrategyOptimizer** (`optimizer.py`): Main orchestrator — runs trials, saves best configs to YAML, exports CSV
+- **ParameterSpace** (`param_space.py`): Defines 17 tunable parameters across grid, exit, regime, policy, rebalance, funding, position categories
+- **MultiObjectiveFunction** (`objective.py`): Weighted scoring — Sharpe (0.35), profit factor (0.30), Calmar (0.35), drawdown penalty (-0.20)
+- **ConstraintsValidator** (`constraints.py`): Hard constraint filtering — min Sharpe, max drawdown, min trades, min win rate, min profit factor, min Calmar
+- **ParallelBacktestRunner** (`parallel_runner.py`): Multi-process backtest execution
+- **OptimizationResultsDB** (`results_db.py`): SQLite persistence — store, query, export, cleanup trials
 
 **Parameter Bounds (designed for ~$10k account):**
 | Parameter | Min | Max | Notes |
@@ -427,34 +494,25 @@ Bayesian hyperparameter optimization using Optuna:
 
 **Optimization Usage:**
 ```python
-from naut_hedgegrid.optimization import (
-    StrategyOptimizer,
-    ConstraintsValidator,
-    MultiObjectiveFunction,
-)
+from naut_hedgegrid.optimization import StrategyOptimizer
 from naut_hedgegrid.optimization.constraints import ConstraintThresholds
-from naut_hedgegrid.optimization.objective import ObjectiveWeights
 
-# Custom constraint thresholds
 constraints = ConstraintThresholds(
     min_sharpe_ratio=0.5,
     max_drawdown_pct=25.0,
     min_trades=30,
 )
 
-# Initialize optimizer
 optimizer = StrategyOptimizer(
-    backtest_config_path="configs/backtest/btcusdt.yaml",
+    backtest_config_path="configs/backtest/btcusdt_mark_trades_funding.yaml",
     base_strategy_config_path="configs/strategies/hedge_grid_v1.yaml",
     n_trials=200,
-    n_jobs=4,  # Parallel execution
+    n_jobs=4,
     study_name="my_optimization",
     constraint_thresholds=constraints,
 )
 
-# Run optimization
 study = optimizer.optimize()
-
 # Best parameters saved to: configs/strategies/my_optimization_best.yaml
 print(f"Best score: {study.best_value:.4f}")
 print(f"Best params: {study.best_trial.params}")
@@ -464,14 +522,13 @@ print(f"Best params: {study.best_trial.params}")
 
 All configuration is **code-as-config** using Pydantic v2 models with YAML files.
 
-### Strategy Configuration Pattern
+### Pattern
 
 1. Define Pydantic model in `naut_hedgegrid/config/`
 2. Create loader class inheriting from `BaseYamlConfigLoader`
 3. Store YAML configs in `configs/` directory
 4. Load with: `ConfigLoader.load(path)`
 
-Example:
 ```python
 from naut_hedgegrid.config.strategy import HedgeGridConfigLoader
 
@@ -487,12 +544,52 @@ api:
   api_secret: ${BINANCE_API_SECRET}
 ```
 
-**Required Environment Variables:**
-- `BINANCE_API_KEY`: Binance API key (for paper/live trading)
-- `BINANCE_API_SECRET`: Binance API secret (for paper/live trading)
-- `TARDIS_API_KEY`: Tardis.dev API key (optional, for data fetching)
+**Required for paper/live trading:**
+- `BINANCE_API_KEY` and `BINANCE_API_SECRET`: Required even for paper trading (instrument metadata load)
+- `TARDIS_API_KEY`: Optional, for data fetching only
 
-**Note:** Binance requires API credentials even for paper trading to load instrument definitions (metadata). No real orders are placed in paper trading mode.
+### Strategy Config Example
+
+```yaml
+# configs/strategies/hedge_grid_v1.yaml
+strategy:
+  name: HedgeGrid-BTCUSDT
+  instrument_id: BTCUSDT-PERP.BINANCE
+
+grid:
+  grid_step_bps: 50.0
+  grid_levels_long: 10
+  grid_levels_short: 10
+  base_qty: 0.01
+  qty_scale: 1.1
+
+exit:
+  tp_steps: 2
+  sl_steps: 5
+
+regime:
+  adx_len: 14
+  ema_fast: 21
+  ema_slow: 50
+  atr_len: 14
+  hysteresis_bps: 10.0
+
+policy:
+  strategy: throttled-counter
+  counter_levels: 5
+  counter_qty_scale: 0.5
+
+position:
+  max_position_pct: 50.0
+
+risk_management:
+  max_drawdown_pct: 10.0
+  enable_drawdown_protection: true
+  enable_circuit_breaker: true
+  enable_position_validation: true
+  max_errors_per_minute: 5
+  circuit_breaker_cooldown_seconds: 60
+```
 
 ## Component Orchestration Pattern
 
@@ -545,11 +642,11 @@ def on_bar(self, bar: Bar):
 
 The strategy has three active risk enforcement mechanisms, all wired into the trading hot path:
 
-1. **Drawdown Protection** (`_check_drawdown_limit`): Called at the start of every `on_bar()`. Tracks peak balance and pauses trading if unrealized drawdown exceeds `risk_management.max_drawdown_pct`. Controlled by `risk_management.enable_drawdown_protection`.
+1. **Drawdown Protection** (`RiskManagementMixin._check_drawdown_limit`): Called at the start of every `on_bar()`. Tracks peak balance and pauses trading if unrealized drawdown exceeds `risk_management.max_drawdown_pct`. Controlled by `risk_management.enable_drawdown_protection`.
 
-2. **Circuit Breaker** (`_check_circuit_breaker`): Triggered from `on_order_rejected()` and `on_order_denied()`. Tracks error rate per minute and activates cooldown if errors exceed `risk_management.max_errors_per_minute`. Cooldown duration set by `risk_management.circuit_breaker_cooldown_seconds`. Controlled by `risk_management.enable_circuit_breaker`.
+2. **Circuit Breaker** (`RiskManagementMixin._check_circuit_breaker`): Triggered from `on_order_rejected()` and `on_order_denied()`. Tracks error rate per minute and activates cooldown if errors exceed `risk_management.max_errors_per_minute`. Cooldown duration set by `risk_management.circuit_breaker_cooldown_seconds`. Controlled by `risk_management.enable_circuit_breaker`.
 
-3. **Position Size Validation** (`_validate_order_size`): Called in `_execute_add()` before every `submit_order()`. Rejects orders that would push position beyond `position.max_position_pct` of account balance. Controlled by `risk_management.enable_position_validation`.
+3. **Position Size Validation** (`RiskManagementMixin._validate_order_size`): Called in `_execute_add()` before every `submit_order()`. Rejects orders that would push position beyond `position.max_position_pct` of account balance. Controlled by `risk_management.enable_position_validation`.
 
 **Config access pattern** (correct):
 ```python
@@ -562,6 +659,8 @@ max_pos = self._hedge_grid_config.position.max_position_pct
 ```
 
 **Startup Reconciliation**: On `on_start()`, `_hydrate_grid_orders_cache()` queries existing open orders from the exchange cache and populates `_grid_orders_cache` to prevent duplicate ladder placements after restarts.
+
+**State Persistence** (`StatePersistenceMixin`): Atomically saves `peak_balance` and `realized_pnl` to a JSON sidecar file after each fill. Loaded on `on_start()` to restore continuity across process restarts.
 
 ## Hedge Mode and Position Management
 
@@ -582,21 +681,19 @@ position_id = PositionId(f"{instrument_id}-SHORT")
 ```python
 # In configs:
 oms_type: OmsType.HEDGING  # NOT NETTING
-
-# This enables separate long/short positions
 ```
 
-**TP/SL Attachment on Fills:**
+**TP/SL Attachment on Fills** (handled by `ExitManagerMixin`):
 
 When a grid order fills, the strategy automatically attaches:
 1. **Take Profit**: Limit order (reduce-only) at profit target
 2. **Stop Loss**: Stop-market order (reduce-only) at stop loss
 
-Both use **opposite side** from the fill (SELL to close LONG, BUY to close SHORT) and maintain the same position_id suffix.
+Both use the opposite side from the fill (SELL to close LONG, BUY to close SHORT) and maintain the same `position_id` suffix.
 
 ## Data Flow and Type Conversions
 
-Components use domain types, Nautilus uses Nautilus types. Conversions happen at strategy boundaries:
+Components use domain types; Nautilus uses Nautilus types. Conversions happen at strategy boundaries:
 
 ```python
 # Nautilus Bar → Domain Bar (for RegimeDetector)
@@ -608,7 +705,7 @@ detector_bar = DetectorBar(
     volume=float(bar.volume),
 )
 
-# Domain Rung → Nautilus LimitOrder (in OrderDiff/Strategy)
+# Domain Rung → Nautilus LimitOrder (in OrderExecutionMixin)
 order = self.order_factory.limit(
     instrument_id=instrument.id,
     order_side=OrderSide.BUY if side == Side.LONG else OrderSide.SELL,
@@ -619,40 +716,47 @@ order = self.order_factory.limit(
 )
 ```
 
-## Testing Strategy
+## Testing
 
 ```bash
-# Component tests (unit tests for pure functions)
-tests/strategy/test_grid.py        # GridEngine
-tests/strategy/test_policy.py      # PlacementPolicy
-tests/strategy/test_detector.py    # RegimeDetector
-tests/strategy/test_funding_guard.py
-tests/strategy/test_order_sync.py
+# Component tests (pure functions)
+tests/strategy/test_grid.py              # GridEngine
+tests/strategy/test_policy.py           # PlacementPolicy
+tests/strategy/test_detector.py         # RegimeDetector
+tests/strategy/test_funding_guard.py    # FundingGuard
+tests/strategy/test_order_sync.py       # OrderDiff
+tests/strategy/test_state_persistence.py  # StatePersistenceMixin
 
-# Integration tests (strategy lifecycle)
+# Strategy integration tests
 tests/strategy/test_strategy_smoke.py
 
 # Operational controls tests
-tests/ops/test_kill_switch.py      # 27 tests
-tests/ops/test_alerts.py           # 25 tests
-tests/ops/test_prometheus.py       # 20 tests
+tests/ops/test_kill_switch.py
+tests/ops/test_alerts.py
+tests/ops/test_prometheus.py
+tests/ops/test_api.py                   # FastAPI control endpoints
 
 # Data pipeline tests
 tests/data/
 
-# Run subset
+# Optimization tests
+tests/optimization/
+
+# Top-level integration tests
+tests/test_ops_integration.py
+tests/test_order_diff.py
+tests/test_parity.py
+tests/test_post_only_retry.py
+tests/test_precision.py
+
+# Run a subset
 uv run pytest tests/strategy/ -k "grid"
 
 # Run with coverage
 uv run pytest tests/ --cov=naut_hedgegrid --cov-report=html
 ```
 
-**Test Coverage:**
-- 645 tests collected, 608 passing, 37 skipped
-- Core component tests (grid, policy, detector, funding guard, order sync)
-- Operational controls tests (kill switch, alerts, prometheus)
-- Data pipeline tests
-- Strategy integration tests
+**Test Coverage:** 675 tests collected. Core component tests, operational controls, data pipeline, optimization framework, and strategy integration tests.
 
 ## Operational Controls
 
@@ -660,58 +764,21 @@ When paper or live trading is started with `--enable-ops`, the following service
 
 ### Prometheus Metrics (Port 9090 default)
 
-Access metrics at: `http://localhost:9090/metrics`
-
-Query via CLI:
-```bash
-python -m naut_hedgegrid metrics
-```
-
-Integration with monitoring tools:
-- Grafana dashboards
-- Alertmanager rules
-- Prometheus queries
+Access at `http://localhost:9090/metrics`. Query via CLI: `python -m naut_hedgegrid metrics`. Integrates with Grafana and Alertmanager.
 
 ### FastAPI Control Endpoints (Port 8080 default)
 
-Access Swagger docs at: `http://localhost:8080/docs`
-
-Available endpoints:
-- `GET /health` - Quick health check
-- `GET /api/v1/status` - Full strategy status
-- `POST /api/v1/flatten/{side}` - Flatten positions (LONG/SHORT/BOTH)
-- `POST /api/v1/set-throttle` - Adjust strategy aggressiveness
-- `GET /api/v1/ladders` - Current grid state
-- `GET /api/v1/orders` - Open orders
-
-Query via CLI:
+Swagger docs at `http://localhost:8080/docs`. Query via CLI:
 ```bash
-# Get status
 python -m naut_hedgegrid status
-
-# Flatten all positions
 python -m naut_hedgegrid flatten
-
-# Flatten only longs
 python -m naut_hedgegrid flatten --side LONG
 ```
 
 ### Kill Switch
 
-Automatically instantiated by `OperationsManager.start()` when `--enable-ops` is passed. Monitors:
-- Max drawdown (unrealized)
-- Max drawdown (realized)
-- Position size limits (LONG/SHORT inventory)
-- Funding cost thresholds
-- Margin ratio
+Instantiated by `OperationsManager.start()`. Monitors drawdown, position size, funding cost, margin ratio. On trigger: cancels all orders, closes all positions (market orders), sends alerts.
 
-When triggered:
-1. Cancel all open orders
-2. Close all positions (market orders)
-3. Send alerts via configured channels
-4. Log event with full context
-
-Configuration:
 ```yaml
 kill_switch:
   max_drawdown_pct: 5.0
@@ -722,29 +789,18 @@ kill_switch:
 
 ### Alert System
 
-Multi-channel notifications for:
-- Kill switch triggers
-- Position fills
-- Error conditions
-- Strategy state changes
-
-Supported channels:
-- Slack webhooks
-- Telegram bot
-- Console logging
-- File logging
+Multi-channel: Slack webhooks, Telegram bot, console/file logging. Fires on kill switch triggers, error conditions, state changes.
 
 ## Data Pipeline
 
 ### Quick Start
 
-Generate sample data from Tardis.dev:
 ```bash
 export TARDIS_API_KEY="your_key"
 python -m naut_hedgegrid.data.scripts.generate_sample_data
 ```
 
-### Manual Pipeline Execution
+### Manual Execution
 
 ```bash
 # Tardis.dev source
@@ -771,35 +827,93 @@ python -m naut_hedgegrid.data.pipelines.replay_to_parquet \
     --output ./data/catalog
 ```
 
-### Output Structure
+## Backtest Workflow
 
+```bash
+# 1. Prepare data catalog (see Data Pipeline above)
+
+# 2. Run backtest
+uv run python -m naut_hedgegrid backtest \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml
+
+# 3. View results in artifacts/backtests/<timestamp>/
+#    config.json, summary.json, orders.csv, positions.csv, metrics.csv
 ```
-data/catalog/
-├── BTCUSDT-PERP.BINANCE/
-│   ├── trade_tick.parquet       # Nautilus TradeTick objects
-│   ├── mark_price.parquet       # Custom parquet (timestamp, mark_price)
-│   └── funding_rate.parquet     # Custom parquet (timestamp, rate, next_funding)
-└── instruments.parquet           # CryptoPerpetual definitions
+
+## Optimization Workflow
+
+```bash
+# 1. Ensure backtest data is prepared
+
+# 2. Run optimization
+uv run python -m naut_hedgegrid.optimization.cli optimize \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/hedge_grid_v1.yaml \
+    --trials 200 \
+    --study-name btcusdt_grid_opt
+
+# 3. Analyze results
+uv run python -m naut_hedgegrid.optimization.cli analyze btcusdt_grid_opt --top-n 10
+
+# 4. Best config saved to configs/strategies/btcusdt_grid_opt_best.yaml
+
+# 5. Validate with backtest
+uv run python -m naut_hedgegrid backtest \
+    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
+    --strategy-config configs/strategies/btcusdt_grid_opt_best.yaml
 ```
 
-### Integration with Backtests
+**Output Files:**
+- `optimization_results.db`: SQLite database with all trial results
+- `configs/strategies/{study_name}_best.yaml`: Best parameters as strategy config
+- `artifacts/optimization_results.csv`: Optional CSV export
 
-Backtest runner automatically reads from catalog:
-```yaml
-# configs/backtest/btcusdt.yaml
-data:
-  catalog_path: "./data/catalog"
-  instruments:
-    - instrument_id: "BTCUSDT-PERP.BINANCE"
-      data_types:
-        - type: "TradeTick"
-        - type: "FundingRate"
-        - type: "MarkPrice"
+**Overnight run:**
+```bash
+uv run python run_optimization_overnight.py
+```
+
+## NautilusTrader Integration Notes
+
+**Strategy Lifecycle:**
+- `__init__()`: Initialize state variables
+- `on_start()`: Load config, initialize components, subscribe to data, hydrate grid orders cache, restore persisted state
+- `on_bar()`: Risk checks (drawdown/circuit breaker) → main trading logic
+- `on_data()`: Process funding rate updates from `BinanceFuturesMarkPriceUpdate`
+- `on_order_filled()`: Attach TP/SL via `ExitManagerMixin`, track realized PnL, persist state
+- `on_order_accepted()`: Track live orders (`OrderEventsMixin`)
+- `on_order_canceled()`: Remove from tracking (`OrderEventsMixin`)
+- `on_order_rejected()` / `on_order_denied()`: Error tracking → circuit breaker evaluation (`RiskManagementMixin`)
+- `on_stop()`: Cancel all orders, log final state
+
+**Data Subscriptions:**
+```python
+# Subscribe to bars in on_start()
+self.subscribe_bars(self.bar_type)
+
+# Subscribe to mark price / funding rate updates (live/paper only)
+from nautilus_trader.adapters.binance.futures.types import BinanceFuturesMarkPriceUpdate
+mark_price_type = DataType(BinanceFuturesMarkPriceUpdate, metadata={"instrument_id": self.instrument_id})
+self.subscribe_data(mark_price_type)
+```
+
+**Order Submission with Hedge Mode:**
+```python
+order = self.order_factory.limit(...)
+position_id = PositionId(f"{self.instrument_id}-LONG")
+self.submit_order(order, position_id=position_id)
 ```
 
 ## Code Style Conventions
 
-**Use ruff, NOT black/flake8/isort:**
+**Ruff configuration** (see `ruff.toml`):
+- `line-length = 120`
+- `target-version = "py311"` (for compatibility)
+- 50+ rule categories enabled (comprehensive coverage beyond just E, F, I)
+- `quote-style = "double"`, `indent-style = "space"`
+- Per-file ignores for tests, examples, and debug scripts
+
 ```bash
 uv run ruff format .      # Format code
 uv run ruff check --fix . # Auto-fix violations
@@ -813,7 +927,7 @@ class Config(BaseModel):
     name: str = Field(description="Name field")
 ```
 
-**Type hints required on public APIs:**
+**Type hints required on all public APIs** (mypy strict mode):
 ```python
 def build_ladders(mid: float, cfg: HedgeGridConfig, regime: Regime) -> list[Ladder]:
     ...
@@ -837,7 +951,7 @@ Ruff handles import sorting automatically. Standard order:
 2. Third-party (NautilusTrader, pydantic, etc.)
 3. Local application (`naut_hedgegrid.*`)
 
-Prefer absolute imports from package root:
+Prefer absolute imports:
 ```python
 # Good
 from naut_hedgegrid.strategy.grid import GridEngine
@@ -863,158 +977,9 @@ Rich console for CLI output:
 from rich.console import Console
 
 console = Console()
-console.print("[green]✓[/green] Success message")
-console.print("[yellow]⚠[/yellow] Warning message")
-console.print("[red]Error[/red] Error message")
-```
-
-## Configuration Examples
-
-Example strategy config structure:
-```yaml
-# configs/strategies/hedge_grid_v1.yaml
-strategy:
-  name: HedgeGrid-BTCUSDT
-  instrument_id: BTCUSDT-PERP.BINANCE
-
-grid:
-  grid_step_bps: 50.0      # 0.5% spacing
-  grid_levels_long: 10     # 10 levels below mid
-  grid_levels_short: 10    # 10 levels above mid
-  base_qty: 0.01           # Base order size
-  qty_scale: 1.1           # 10% increase per level
-
-exit:
-  tp_steps: 2              # TP after 2 grid steps
-  sl_steps: 5              # SL after 5 grid steps
-
-regime:
-  adx_len: 14
-  ema_fast: 21
-  ema_slow: 50
-  atr_len: 14
-  hysteresis_bps: 10.0
-
-policy:
-  strategy: throttled-counter
-  counter_levels: 5
-  counter_qty_scale: 0.5
-```
-
-## Backtest Workflow
-
-```bash
-# 1. Prepare Parquet data catalog
-data/catalog/
-├── btcusdt/
-│   ├── trades/
-│   │   └── 2024-01-01.parquet
-│   ├── bars/
-│   │   └── 2024-01-01.parquet
-│   └── funding/
-│       └── 2024-01-01.parquet
-
-# 2. Configure backtest
-configs/backtest/btcusdt_mark_trades_funding.yaml
-
-# 3. Run backtest
-uv run python -m naut_hedgegrid backtest
-
-# 4. View results
-artifacts/backtests/20241014_120000/
-├── config.json       # Full config used
-├── summary.json      # Metrics summary
-├── orders.csv        # All orders
-├── positions.csv     # Position history
-└── metrics.csv       # Performance metrics
-```
-
-## Optimization Workflow
-
-```bash
-# 1. Ensure backtest data is prepared (see Backtest Workflow)
-
-# 2. Run optimization
-uv run python -m naut_hedgegrid.optimization.cli optimize \
-    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
-    --strategy-config configs/strategies/hedge_grid_v1.yaml \
-    --trials 200 \
-    --study-name btcusdt_grid_opt
-
-# 3. View optimization progress (live during run)
-# Results are saved continuously to SQLite database
-
-# 4. Analyze results after completion
-uv run python -m naut_hedgegrid.optimization.cli analyze btcusdt_grid_opt \
-    --top-n 10
-
-# 5. Best config automatically saved to:
-configs/strategies/btcusdt_grid_opt_best.yaml
-
-# 6. Run backtest with optimized parameters
-uv run python -m naut_hedgegrid backtest \
-    --backtest-config configs/backtest/btcusdt_mark_trades_funding.yaml \
-    --strategy-config configs/strategies/btcusdt_grid_opt_best.yaml
-```
-
-**Output Files:**
-- `optimization_results.db`: SQLite database with all trial results
-- `configs/strategies/{study_name}_best.yaml`: Best parameters as strategy config
-- `artifacts/optimization_results.csv`: Optional CSV export of all trials
-
-**Overnight Optimization Script:**
-
-For long-running optimizations, use the provided script:
-```bash
-# Run 200 trials with 4 parallel workers
-uv run python run_optimization_overnight.py
-```
-
-This script:
-- Uses relaxed constraints for exploration
-- Runs 200 trials with parallel execution
-- Saves best results automatically
-- Provides detailed summary statistics
-
-## NautilusTrader Integration Notes
-
-**Strategy Lifecycle:**
-- `__init__()`: Initialize state variables
-- `on_start()`: Load config, initialize components, subscribe to data, hydrate grid orders cache
-- `on_bar()`: Risk checks (drawdown/circuit breaker) → main trading logic
-- `on_data()`: Process funding rate updates from `BinanceFuturesMarkPriceUpdate`
-- `on_order_filled()`: Attach TP/SL, track realized PnL
-- `on_order_accepted()`: Track live orders
-- `on_order_canceled()`: Remove from tracking
-- `on_order_rejected()` / `on_order_denied()`: Error tracking → circuit breaker evaluation
-- `on_stop()`: Cancel all orders, log final state
-
-**Data Subscriptions:**
-```python
-# Subscribe to bars in on_start()
-self.subscribe_bars(self.bar_type)
-
-# Subscribe to mark price / funding rate updates (live/paper only)
-from nautilus_trader.adapters.binance.futures.types import BinanceFuturesMarkPriceUpdate
-mark_price_type = DataType(BinanceFuturesMarkPriceUpdate, metadata={"instrument_id": self.instrument_id})
-self.subscribe_data(mark_price_type)
-
-# Bar data arrives in on_bar()
-def on_bar(self, bar: Bar):
-    # bar.open, bar.high, bar.low, bar.close, bar.volume
-    ...
-
-# Funding rate data arrives in on_data()
-def on_data(self, data):
-    # Updates self._last_funding_rate and feeds FundingGuard
-    ...
-```
-
-**Order Submission with Hedge Mode:**
-```python
-order = self.order_factory.limit(...)
-position_id = PositionId(f"{self.instrument_id}-LONG")
-self.submit_order(order, position_id=position_id)
+console.print("[green]Success message[/green]")
+console.print("[yellow]Warning message[/yellow]")
+console.print("[red]Error message[/red]")
 ```
 
 ## Development Best Practices
@@ -1032,7 +997,7 @@ self.submit_order(order, position_id=position_id)
 
 5. **Use Pydantic models for all configuration** - validation happens at load time
 
-6. **Follow the layered architecture** - don't skip layers or create circular dependencies
+6. **Follow the layered architecture** - do not skip layers or create circular dependencies
 
 7. **Document complex algorithms** with inline comments and docstrings
 
@@ -1045,3 +1010,7 @@ self.submit_order(order, position_id=position_id)
 11. **Run optimization before deploying new strategies** - use the optimization framework to find robust parameters
 
 12. **Validate optimized parameters with out-of-sample testing** - optimize on one time period, test on another
+
+13. **Respect the mixin boundaries** - add new strategy functionality to the appropriate mixin, not directly to `HedgeGridV1.strategy.py`
+
+14. **Test state persistence** - after any change to persisted fields in `StatePersistenceMixin`, verify round-trip save/load in `tests/strategy/test_state_persistence.py`
