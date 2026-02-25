@@ -617,24 +617,32 @@ class HedgeGridV1(
             if position is None or position.quantity == 0:
                 continue
 
-            # Check if TP/SL already exist for this side
-            has_tp = False
-            has_sl = False
+            # Check existing TP/SL coverage by summing quantities
+            tp_qty_total = 0.0
+            sl_qty_total = 0.0
             side_abbr = "L" if side == Side.LONG else "S"
             for order in self.cache.orders_open(venue=self._venue):
                 oid = order.client_order_id.value
                 if f"-TP-{side_abbr}" in oid:
-                    has_tp = True
+                    tp_qty_total += float(order.quantity)
                 if f"-SL-{side_abbr}" in oid:
-                    has_sl = True
+                    sl_qty_total += float(order.quantity)
 
-            if has_tp and has_sl:
-                self.log.info(f"[RECONCILE] {side} position ({float(position.quantity)}) already has TP/SL, skipping")
+            qty = float(position.quantity)
+            min_coverage = min(tp_qty_total, sl_qty_total)
+
+            if min_coverage >= qty * 0.95:  # 5% tolerance for rounding
+                self.log.info(
+                    f"[RECONCILE] {side} position ({qty}) fully covered by "
+                    f"existing TP({tp_qty_total:.6f})/SL({sl_qty_total:.6f}), skipping"
+                )
                 continue
+
+            # Calculate gap quantity that needs TP/SL coverage
+            gap_qty = qty - min_coverage
 
             # Calculate TP/SL from average entry price
             entry_price = float(position.avg_px_open)
-            qty = float(position.quantity)
 
             mid_decimal = Decimal(str(mid))
             entry_decimal = Decimal(str(entry_price))
@@ -668,19 +676,20 @@ class HedgeGridV1(
 
             self.log.info(
                 f"[RECONCILE] Attaching TP/SL to existing {side} position: "
-                f"qty={qty}, entry={entry_price:.2f}, TP={tp_price:.2f}, SL={sl_price:.2f}"
+                f"pos_qty={qty}, gap_qty={gap_qty:.6f}, existing_coverage={min_coverage:.6f}, "
+                f"entry={entry_price:.2f}, TP={tp_price:.2f}, SL={sl_price:.2f}"
             )
 
             tp_order = self._create_tp_order(
                 side=side,
-                quantity=qty,
+                quantity=gap_qty,
                 tp_price=tp_price,
                 level=0,
                 fill_event_ts=ts_now,
             )
             sl_order = self._create_sl_order(
                 side=side,
-                quantity=qty,
+                quantity=gap_qty,
                 sl_price=sl_price,
                 level=0,
                 fill_event_ts=ts_now,
@@ -689,9 +698,17 @@ class HedgeGridV1(
             self.submit_order(tp_order, position_id=position_id)
             self.submit_order(sl_order, position_id=position_id)
 
+            # Register TP/SL pair so OCO cancellation works when one side fills.
+            # Uses level=0 fill_key format consistent with _cancel_counterpart_exit lookup.
+            fill_key = f"{side.value}-0"
+            tp_order_id = tp_order.client_order_id.value
+            sl_order_id = sl_order.client_order_id.value
+            with self._tp_sl_pairs_lock:
+                self._tp_sl_pairs[fill_key] = (tp_order_id, sl_order_id)
+
             # Mark as having exits so on_order_filled doesn't duplicate
             with self._fills_lock:
-                self._fills_with_exits.add(f"{side.value}-RECONCILED")
+                self._fills_with_exits.add(fill_key)
 
     def on_bar(self, bar: Bar) -> None:
         """
@@ -823,8 +840,10 @@ class HedgeGridV1(
                     f"cancelled {cancelled_exits} orphaned TP/SL orders"
                 )
 
-            # Re-reconcile positions on next bar to re-attach TP/SL to surviving positions
-            self._positions_reconciled = False
+            # Immediately re-attach TP/SL to surviving positions (no one-bar gap).
+            # The quantity-aware reconcile will create TP/SL for the full position
+            # since we just cleared all exits above.
+            self._reconcile_existing_positions(mid)
 
         # Build ladders
         ladders = GridEngine.build_ladders(
@@ -1060,6 +1079,19 @@ class HedgeGridV1(
                                     )
                             # OCO: Cancel the counterpart order (TP filled → cancel SL, and vice versa)
                             self._cancel_counterpart_exit(exit_fill_key, order_type)
+
+                            # Safety net: if this exit fill closed the position entirely,
+                            # cancel ALL remaining exit orders for that side to prevent
+                            # orphaned orders from opening unwanted positions.
+                            position_id = PositionId(f"{self.instrument_id}-{side_name}")
+                            pos = self.cache.position(position_id)
+                            if pos is None or pos.quantity == 0 or pos.is_closed:
+                                orphans = self._cancel_exit_orders_for_side(side_abbr)
+                                if orphans > 0:
+                                    self.log.info(
+                                        f"[ORPHAN CLEANUP] {side_name} position is flat, "
+                                        f"cancelled {orphans} remaining exit orders"
+                                    )
 
                 except (ValueError, IndexError) as e:
                     self.log.warning(
