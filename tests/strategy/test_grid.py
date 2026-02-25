@@ -86,6 +86,16 @@ def test_grid_engine_basic_construction() -> None:
     assert ladders[1].side == Side.SHORT
 
 
+def test_grid_engine_assigns_levels() -> None:
+    """Test GridEngine sets level field on each rung (1-based, sequential)."""
+    cfg = create_test_config(grid_levels_long=5, grid_levels_short=5)
+    ladders = GridEngine.build_ladders(100.0, cfg, Regime.SIDEWAYS)
+
+    for ladder in ladders:
+        for i, rung in enumerate(ladder, start=1):
+            assert rung.level == i, f"Expected level {i}, got {rung.level} for {rung.side}"
+
+
 def test_long_ladder_prices_below_mid() -> None:
     """Test LONG ladder prices are below mid price."""
     cfg = create_test_config()

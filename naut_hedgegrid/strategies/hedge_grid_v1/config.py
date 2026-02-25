@@ -31,6 +31,3 @@ class HedgeGridV1Config(StrategyConfig, frozen=True, kw_only=True):
     instrument_id: str
     hedge_grid_config_path: str
     oms_type: OmsType = OmsType.HEDGING  # Required for Binance hedge mode
-    enable_warmup: bool = True  # Enable regime detector warmup on start
-    testnet: bool = False  # Whether using testnet (for warmup API endpoint)
-    require_warmup_success: bool = False  # If True, pause trading on warmup failure (for live mode)

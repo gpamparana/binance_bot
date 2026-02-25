@@ -113,6 +113,7 @@ class GridEngine:
                 side=Side.LONG,
                 tp=float(tp_decimal) if tp_decimal else None,
                 sl=float(sl_decimal) if sl_decimal else None,
+                level=level,
             )
             rungs.append(rung)
 
@@ -171,6 +172,7 @@ class GridEngine:
                 side=Side.SHORT,
                 tp=float(tp_decimal) if tp_decimal else None,
                 sl=float(sl_decimal) if sl_decimal else None,
+                level=level,
             )
             rungs.append(rung)
 

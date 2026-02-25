@@ -96,6 +96,7 @@ class Rung:
     tp: float | None = None
     sl: float | None = None
     tag: str = ""
+    level: int = 0  # Grid level (1-based). 0 = unassigned (backward compat).
 
     def __post_init__(self) -> None:
         """Validate rung parameters."""
@@ -110,6 +111,9 @@ class Rung:
             raise ValueError(msg)
         if self.sl is not None and self.sl <= 0:
             msg = f"Stop loss must be positive, got {self.sl}"
+            raise ValueError(msg)
+        if self.level < 0:
+            msg = f"Level must be non-negative, got {self.level}"
             raise ValueError(msg)
 
     def with_tag(self, tag: str) -> "Rung":
@@ -129,6 +133,7 @@ class Rung:
             tp=self.tp,
             sl=self.sl,
             tag=tag,
+            level=self.level,
         )
 
     def distance_from(self, price: float) -> float:

@@ -196,7 +196,7 @@ class OrderDiff:
 
         """
         # Check cache - use structural keys for reliable comparison
-        desired_key = tuple((l.side, tuple((r.price, r.qty) for r in l.rungs)) for l in desired_ladders)
+        desired_key = tuple((l.side, tuple((r.price, r.qty, r.level) for r in l.rungs)) for l in desired_ladders)
         live_key = tuple((o.client_order_id, o.side, o.price, o.qty, o.status) for o in live_orders)
 
         if self._last_desired_key == desired_key and self._last_live_key == live_key and self._last_result is not None:
@@ -278,14 +278,17 @@ class OrderDiff:
             List of (client_order_id, rung) tuples
 
         Notes:
-            Uses level index (position in ladder) to generate consistent IDs.
+            Uses rung.level (set by GridEngine) for stable level IDs that survive
+            filtering. Falls back to enumeration position for backward compatibility
+            with Rungs that have level=0 (unassigned).
             Format: {strategy}-{side}-{level:02d}-{timestamp}
 
         """
         result: list[tuple[str, Rung]] = []
 
         for ladder in ladders:
-            for level, rung in enumerate(ladder, start=1):
+            for idx, rung in enumerate(ladder, start=1):
+                level = rung.level if rung.level > 0 else idx
                 client_order_id = format_client_order_id(self._strategy_name, rung.side, level)
                 result.append((client_order_id, rung))
 

@@ -221,6 +221,7 @@ class PrecisionGuard:
             tp=rung.tp,
             sl=rung.sl,
             tag=rung.tag,
+            level=rung.level,
         )
 
     @property

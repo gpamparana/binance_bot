@@ -130,6 +130,7 @@ class PlacementPolicy:
                     tp=rung.tp,
                     sl=rung.sl,
                     tag=rung.tag,
+                    level=rung.level,
                 )
                 for rung in truncated_rungs
             ]

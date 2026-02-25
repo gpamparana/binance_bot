@@ -333,6 +333,18 @@ def test_clamp_rung_preserves_metadata() -> None:
     assert clamped.tag == "test_tag"
 
 
+def test_clamp_rung_preserves_level() -> None:
+    """Test clamp_rung propagates level field."""
+    precision = create_test_precision()
+    guard = PrecisionGuard(precision=precision)
+
+    original = Rung(price=100.123, qty=0.567, side=Side.LONG, level=7)
+    clamped = guard.clamp_rung(original)
+
+    assert clamped is not None
+    assert clamped.level == 7
+
+
 def test_clamp_rung_caps_at_max_qty() -> None:
     """Test clamp_rung caps quantity at maximum."""
     precision = create_test_precision(

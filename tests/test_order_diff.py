@@ -904,3 +904,86 @@ def test_diff_idempotent_with_malformed_client_order_id() -> None:
     # Second diff - should be stable
     result2 = diff.diff([ladder], live)
     assert result2.is_empty
+
+
+# ============================================================================
+# Level Stability Tests (M3: churn from level re-indexing)
+# ============================================================================
+
+
+def test_diff_no_churn_when_middle_rung_filtered() -> None:
+    """
+    Test: Removing a middle rung should NOT shift levels and cause false replaces.
+
+    This is the core M3 regression test. When a rung is removed from the
+    middle of a ladder (e.g., by precision guard), the remaining rungs should
+    keep their original level indices. Without stable levels, levels 3,4,5
+    would shift to 2,3,4 — causing false REPLACE operations.
+    """
+    guard = create_test_guard()
+    diff = OrderDiff("HG1", guard)
+
+    # Bar 1: 5 rungs with stable levels 1-5
+    rungs_bar1 = [
+        Rung(price=99.0, qty=0.5, side=Side.LONG, level=1),
+        Rung(price=98.0, qty=0.5, side=Side.LONG, level=2),
+        Rung(price=97.0, qty=0.5, side=Side.LONG, level=3),
+        Rung(price=96.0, qty=0.5, side=Side.LONG, level=4),
+        Rung(price=95.0, qty=0.5, side=Side.LONG, level=5),
+    ]
+    ladder_bar1 = Ladder.from_list(Side.LONG, rungs_bar1)
+
+    # Place initial orders
+    result1 = diff.diff([ladder_bar1], [])
+    assert len(result1.adds) == 5
+    live = convert_intents_to_live_orders(list(result1.adds))
+
+    # Bar 2: rung at level 2 removed (e.g., filtered by precision guard)
+    rungs_bar2 = [
+        Rung(price=99.0, qty=0.5, side=Side.LONG, level=1),
+        # level 2 removed
+        Rung(price=97.0, qty=0.5, side=Side.LONG, level=3),
+        Rung(price=96.0, qty=0.5, side=Side.LONG, level=4),
+        Rung(price=95.0, qty=0.5, side=Side.LONG, level=5),
+    ]
+    ladder_bar2 = Ladder.from_list(Side.LONG, rungs_bar2)
+
+    result2 = diff.diff([ladder_bar2], live)
+
+    # Should cancel level 2, no replaces on levels 3-5
+    assert len(result2.cancels) == 1, f"Expected 1 cancel (level 2), got {len(result2.cancels)}"
+    assert len(result2.replaces) == 0, f"Expected 0 replaces, got {len(result2.replaces)}"
+    assert len(result2.adds) == 0, f"Expected 0 adds, got {len(result2.adds)}"
+
+
+def test_diff_level_stability_after_reappearance() -> None:
+    """
+    Test: Rung reappearing after being filtered should not cause churn.
+
+    Bar 1: levels 1-5 placed
+    Bar 2: level 2 removed → cancel level 2
+    Bar 3: level 2 reappears → add level 2 back, no replaces
+    """
+    guard = create_test_guard()
+    diff = OrderDiff("HG1", guard)
+
+    # Bar 1: place all 5 levels
+    rungs = [Rung(price=99.0 - i, qty=0.5, side=Side.LONG, level=i + 1) for i in range(5)]
+    ladder = Ladder.from_list(Side.LONG, rungs)
+
+    result1 = diff.diff([ladder], [])
+    live = convert_intents_to_live_orders(list(result1.adds))
+
+    # Bar 2: remove level 2
+    rungs_no2 = [r for r in rungs if r.level != 2]
+    ladder_no2 = Ladder.from_list(Side.LONG, rungs_no2)
+    result2 = diff.diff([ladder_no2], live)
+    live = apply_diff_operations([ladder_no2], live, result2)
+
+    # Bar 3: level 2 reappears
+    result3 = diff.diff([ladder], live)
+
+    # Should add level 2 back, no replaces on other levels
+    assert len(result3.adds) == 1, f"Expected 1 add (level 2), got {len(result3.adds)}"
+    assert len(result3.replaces) == 0, f"Expected 0 replaces, got {len(result3.replaces)}"
+    assert len(result3.cancels) == 0, f"Expected 0 cancels, got {len(result3.cancels)}"

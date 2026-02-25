@@ -181,6 +181,32 @@ def test_rung_distance_bps_from_zero_price() -> None:
     assert rung.distance_bps_from(0.0) == 0.0
 
 
+def test_rung_level_field() -> None:
+    """Test Rung level field stores grid position."""
+    rung = Rung(price=100.0, qty=0.1, side=Side.LONG, level=5)
+    assert rung.level == 5
+
+
+def test_rung_level_default_zero() -> None:
+    """Test Rung level defaults to 0 (unassigned)."""
+    rung = Rung(price=100.0, qty=0.1, side=Side.LONG)
+    assert rung.level == 0
+
+
+def test_rung_level_negative_rejected() -> None:
+    """Test Rung rejects negative level."""
+    with pytest.raises(ValueError, match="Level must be non-negative"):
+        Rung(price=100.0, qty=0.1, side=Side.LONG, level=-1)
+
+
+def test_rung_with_tag_preserves_level() -> None:
+    """Test with_tag preserves level field."""
+    rung = Rung(price=100.0, qty=0.1, side=Side.LONG, level=3, tag="old")
+    new_rung = rung.with_tag("new")
+    assert new_rung.level == 3
+    assert new_rung.tag == "new"
+
+
 # Ladder Tests
 
 

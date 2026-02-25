@@ -173,7 +173,6 @@ class BaseRunner(ABC):
         strategy_config_path: Path,
         hedge_grid_cfg: HedgeGridConfig,
         venue_cfg: VenueConfig,
-        require_warmup_success: bool = False,
     ) -> ImportableStrategyConfig:
         """Load strategy configuration for TradingNode.
 
@@ -188,8 +187,6 @@ class BaseRunner(ABC):
             Loaded hedge grid configuration
         venue_cfg : VenueConfig
             Venue configuration
-        require_warmup_success : bool
-            If True, pause trading on warmup failure (for live mode)
 
         Returns
         -------
@@ -217,9 +214,6 @@ class BaseRunner(ABC):
                 "instrument_id": instrument_id,
                 "hedge_grid_config_path": str(strategy_config_path),
                 "oms_type": oms_type.value,
-                "enable_warmup": True,  # Enable regime detector warmup
-                "testnet": venue_cfg.api.testnet,  # Pass testnet flag for warmup API
-                "require_warmup_success": require_warmup_success,
             },
         )
 
@@ -560,7 +554,6 @@ class BaseRunner(ABC):
                 strategy_config_path=strat_config_path,
                 hedge_grid_cfg=hedge_grid_cfg,
                 venue_cfg=venue_cfg,
-                require_warmup_success=require_api_keys,
             )
 
             # Create data client config with instrument subscription

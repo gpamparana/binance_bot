@@ -201,6 +201,7 @@ class FundingGuard:
                         tp=rung.tp,
                         sl=rung.sl,
                         tag=rung.tag,
+                        level=rung.level,
                     )
                 )
         return Ladder.from_list(ladder.side, scaled_rungs)

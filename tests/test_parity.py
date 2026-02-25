@@ -396,7 +396,6 @@ def run_backtest_mode(
     strategy_cfg = HedgeGridV1Config(
         instrument_id=instrument_id,
         hedge_grid_config_path=str(strategy_config_path),
-        enable_warmup=False,
     )
 
     # Run backtest

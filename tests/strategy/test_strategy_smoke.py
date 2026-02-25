@@ -215,7 +215,6 @@ def _build_engine_and_strategy(
     config = HedgeGridV1Config(
         instrument_id=INSTRUMENT_ID_STR,
         hedge_grid_config_path=str(strategy_config_path),
-        enable_warmup=False,
     )
     strategy = HedgeGridV1(config=config)
     engine.add_strategy(strategy)
@@ -399,7 +398,6 @@ def test_on_start_missing_instrument(
     config = HedgeGridV1Config(
         instrument_id="ETHUSDT-PERP.BINANCE",  # Not in engine
         hedge_grid_config_path=str(hedge_grid_config_path),
-        enable_warmup=False,
     )
     strategy = HedgeGridV1(config=config)
     engine.add_strategy(strategy)

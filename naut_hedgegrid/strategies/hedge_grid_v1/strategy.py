@@ -372,159 +372,17 @@ class HedgeGridV1(
         self._load_persisted_state()
 
         # Consume prefetched warmup bars (set by runner layer before node.run())
-        # Falls back to legacy _perform_warmup() if no prefetched bars available
         prefetched = getattr(self, "_prefetched_warmup_bars", None)
         if prefetched:
             self.warmup_regime_detector(prefetched)
             del self._prefetched_warmup_bars  # Free memory
-        elif self.config.enable_warmup and not self._is_backtest_mode:
-            self._perform_warmup()
-
-        self.log.info("HedgeGridV1 strategy started successfully")
-
-    def _perform_warmup(self) -> None:
-        """
-        Perform strategy warmup by fetching historical data.
-
-        This method fetches historical bars from Binance and uses them to
-        pre-warm the regime detector, avoiding the need to wait for live bars.
-        """
-        try:
-            # Check if warmup is enabled in config
-            if not self.config.enable_warmup:
-                self.log.info("Warmup disabled in config")
-                return
-
-            # Skip warmup in backtests as they have their own data
-            # Backtests are detected by checking the clock type
-            # TestClock is used in backtests, LiveClock in live/paper trading
-            if hasattr(self.clock, "__class__") and "Test" in self.clock.__class__.__name__:
-                self.log.debug("Skipping warmup in backtest mode")
-                return
-
-            # Try to import the warmup module
-            try:
-                from naut_hedgegrid.config.venue import VenueConfig, VenueConfigLoader
-                from naut_hedgegrid.warmup import BinanceDataWarmer
-            except ImportError as e:
-                self.log.warning(f"Warmup module not available: {e}, starting without warmup")
-                return
-
-            # Get API credentials from environment
-            import os
-
-            api_key = os.environ.get("BINANCE_API_KEY", "")
-            api_secret = os.environ.get("BINANCE_API_SECRET", "")
-
-            if not api_key or not api_secret:
-                self.log.warning("No Binance API credentials found, skipping warmup")
-                return
-
-            # Try to load venue config from file or create minimal config
-            try:
-                # First try to load from standard locations
-                import pathlib
-
-                # Check common venue config paths
-                config_paths = [
-                    pathlib.Path("configs/venues/binance_testnet.yaml"),
-                    pathlib.Path("configs/venues/binance.yaml"),
-                ]
-
-                venue_config = None
-                for config_path in config_paths:
-                    if config_path.exists():
-                        try:
-                            venue_config = VenueConfigLoader.load(str(config_path))
-                            break
-                        except Exception:
-                            continue
-
-                # If no config found or testnet flag differs, create minimal config
-                if venue_config is None or venue_config.api.testnet != self.config.testnet:
-                    # Create minimal config dict matching VenueConfig schema
-                    venue_config_dict = {
-                        "venue": {
-                            "name": "BINANCE",
-                            "venue_type": "futures",
-                            "account_type": "PERPETUAL_LINEAR",
-                        },
-                        "api": {
-                            "api_key": api_key,
-                            "api_secret": api_secret,
-                            "testnet": self.config.testnet,
-                        },
-                        "trading": {
-                            "hedge_mode": True,
-                            "leverage": 1,
-                            "margin_type": "CROSSED",
-                        },
-                        "risk": {
-                            "max_leverage": 20,
-                            "min_order_size_usdt": 5.0,
-                            "max_order_size_usdt": 100000.0,
-                        },
-                        "precision": {
-                            "price_precision": 2,
-                            "quantity_precision": 3,
-                            "min_notional": 5.0,
-                        },
-                        "rate_limits": {
-                            "orders_per_second": 5,
-                            "orders_per_minute": 100,
-                            "weight_per_minute": 1200,
-                        },
-                        "websocket": {
-                            "ping_interval": 30,
-                            "reconnect_timeout": 60,
-                            "max_reconnect_attempts": 10,
-                        },
-                    }
-                    venue_config = VenueConfig.model_validate(venue_config_dict)
-
-            except Exception as e:
-                self.log.warning(f"Could not create venue config for warmup: {e}")
-                return
-
-            # Extract symbol from instrument ID
-            symbol = str(self.instrument_id).split("-")[0]
-
-            # Calculate bars needed for warmup
-            regime_cfg = self._hedge_grid_config.regime
-            warmup_bars = max(regime_cfg.ema_slow + 20, 70)
-
-            self.log.info(
-                f"Starting warmup: fetching {warmup_bars} historical bars for {symbol} (testnet={self.config.testnet})"
+        elif not self._is_backtest_mode:
+            self.log.warning(
+                "No prefetched warmup bars available. Regime detector will warm up "
+                "from live bars (~50 bars). Use BaseRunner to provide warmup."
             )
 
-            # Fetch historical data
-            with BinanceDataWarmer(venue_config) as warmer:
-                historical_bars = warmer.fetch_detector_bars(
-                    symbol=symbol,
-                    num_bars=warmup_bars,
-                    interval="1m",
-                )
-
-                if historical_bars:
-                    self.log.info(f"✓ Fetched {len(historical_bars)} historical bars")
-                    self.warmup_regime_detector(historical_bars)
-                elif self.config.require_warmup_success:
-                    self.log.error(
-                        "No historical bars fetched and require_warmup_success=True. "
-                        "Pausing trading until warmup data is available."
-                    )
-                    self._pause_trading = True
-                else:
-                    self.log.warning("No historical bars fetched, starting without warmup")
-
-        except Exception as e:
-            if self.config.require_warmup_success:
-                self.log.error(
-                    f"Warmup failed and require_warmup_success=True: {e}. Pausing trading until warmup succeeds."
-                )
-                self._pause_trading = True
-            else:
-                self.log.warning(f"Warmup failed: {e}. Starting without warmup.")
+        self.log.info("HedgeGridV1 strategy started successfully")
 
     def warmup_regime_detector(self, historical_bars: list[DetectorBar]) -> None:
         """
