@@ -26,6 +26,8 @@ class APIConfig(BaseModel):
     base_url: HttpUrl | None = Field(default=None, description="Custom base URL for API")
     ws_url: str | None = Field(default=None, description="Custom WebSocket URL")
 
+    _SENTINEL_VALUES = frozenset({"BACKTEST_MODE", "YOUR_API_KEY", "PLACEHOLDER", "CHANGE_ME", "XXX", "TEST"})
+
     @field_validator("api_key", "api_secret")
     @classmethod
     def validate_credentials_not_empty(cls, v: str) -> str:
@@ -33,6 +35,17 @@ class APIConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("API credentials must not be empty. Use ${ENV_VAR} syntax for secrets.")
         return v
+
+    def has_sentinel_credentials(self) -> bool:
+        """Check if credentials are known placeholder/sentinel values.
+
+        Returns True if api_key or api_secret appear to be placeholder values
+        like 'BACKTEST_MODE'. Callers (runners) should reject these for live/paper modes.
+        """
+        return (
+            self.api_key.strip().upper() in self._SENTINEL_VALUES
+            or self.api_secret.strip().upper() in self._SENTINEL_VALUES
+        )
 
 
 class TradingConfig(BaseModel):

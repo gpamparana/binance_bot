@@ -48,7 +48,6 @@ class TestOpsIntegration:
         assert hasattr(strategy, "_cancel_side_orders")
         assert hasattr(strategy, "_close_side_position")
 
-    @pytest.mark.skip(reason="_ops_lock not initialized outside NautilusTrader infrastructure")
     def test_ops_lock_exists(self):
         """Test that strategy has thread-safe ops lock."""
         from naut_hedgegrid.strategies.hedge_grid_v1.config import HedgeGridV1Config
@@ -62,7 +61,7 @@ class TestOpsIntegration:
         strategy = HedgeGridV1(config)
 
         assert hasattr(strategy, "_ops_lock")
-        assert isinstance(strategy._ops_lock, threading.Lock)
+        assert type(strategy._ops_lock) is type(threading.Lock())
 
     def test_metrics_tracking_state(self):
         """Test that strategy initializes metrics tracking state."""

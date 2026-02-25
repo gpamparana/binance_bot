@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -354,7 +354,12 @@ class StrategyAPI:
             )
 
     def _register_routes(self) -> None:
-        """Register all API routes."""
+        """Register all API routes.
+
+        Health check is registered at root level (standard convention).
+        All other routes are under /api/v1 prefix for versioned API contract.
+        """
+        router = APIRouter(prefix="/api/v1")
 
         @self.app.get("/health", response_model=HealthResponse, tags=["Health"])
         async def health_check() -> HealthResponse:
@@ -380,7 +385,7 @@ class StrategyAPI:
                     last_bar=None,
                 )
 
-        @self.app.get("/status", response_model=StatusResponse, tags=["Monitoring"])
+        @router.get("/status", response_model=StatusResponse, tags=["Monitoring"])
         async def get_status(x_api_key: str | None = Header(None)) -> StatusResponse:
             """Get comprehensive strategy status.
 
@@ -404,7 +409,7 @@ class StrategyAPI:
                 logger.error(f"Status query failed: {e}")
                 raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
-        @self.app.post("/start", response_model=OperationResponse, tags=["Operations"])
+        @router.post("/start", response_model=OperationResponse, tags=["Operations"])
         async def start_strategy(x_api_key: str | None = Header(None)) -> OperationResponse:
             """Start strategy trading.
 
@@ -418,7 +423,7 @@ class StrategyAPI:
                 detail="Not yet implemented. Strategy lifecycle is managed by the runner process.",
             )
 
-        @self.app.post("/stop", response_model=OperationResponse, tags=["Operations"])
+        @router.post("/stop", response_model=OperationResponse, tags=["Operations"])
         async def stop_strategy(x_api_key: str | None = Header(None)) -> OperationResponse:
             """Stop strategy trading.
 
@@ -432,7 +437,7 @@ class StrategyAPI:
                 detail="Not yet implemented. Strategy lifecycle is managed by the runner process.",
             )
 
-        @self.app.post("/flatten", response_model=FlattenResponse, tags=["Operations"])
+        @router.post("/flatten", response_model=FlattenResponse, tags=["Operations"])
         async def flatten_positions(request: FlattenRequest, x_api_key: str | None = Header(None)) -> FlattenResponse:
             """Emergency flatten - cancel orders and close positions.
 
@@ -460,7 +465,7 @@ class StrategyAPI:
                 logger.error(f"Flatten operation failed: {e}")
                 raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
-        @self.app.post("/set-throttle", response_model=ThrottleResponse, tags=["Configuration"])
+        @router.post("/set-throttle", response_model=ThrottleResponse, tags=["Configuration"])
         async def set_throttle(request: ThrottleRequest, x_api_key: str | None = Header(None)) -> ThrottleResponse:
             """Adjust strategy aggressiveness (throttle).
 
@@ -484,7 +489,7 @@ class StrategyAPI:
                 logger.error(f"Throttle update failed: {e}")
                 raise HTTPException(status_code=500, detail="Internal error. Check server logs.") from e
 
-        @self.app.get("/ladders", response_model=LaddersResponse, tags=["Data"])
+        @router.get("/ladders", response_model=LaddersResponse, tags=["Data"])
         async def get_ladders(x_api_key: str | None = Header(None)) -> LaddersResponse:
             """Get current grid ladders snapshot.
 
@@ -506,7 +511,7 @@ class StrategyAPI:
                 logger.error(f"Ladders query failed: {e}")
                 raise HTTPException(status_code=500, detail=f"Failed to get ladders: {e}") from e
 
-        @self.app.get("/orders", response_model=OrdersResponse, tags=["Data"])
+        @router.get("/orders", response_model=OrdersResponse, tags=["Data"])
         async def get_orders(x_api_key: str | None = Header(None)) -> OrdersResponse:
             """Get current open orders.
 
@@ -527,6 +532,9 @@ class StrategyAPI:
             except Exception as e:
                 logger.error(f"Orders query failed: {e}")
                 raise HTTPException(status_code=500, detail=f"Failed to get orders: {e}") from e
+
+        # Mount all versioned routes
+        self.app.include_router(router)
 
     def start_server(self, host: str = "127.0.0.1", port: int = 8080) -> None:
         """Start FastAPI server in background thread.

@@ -161,6 +161,7 @@ class HedgeGridV1(
         self._tp_sl_buffer_mult: float = 0.0005  # 5 bps default
         self._circuit_breaker_window_ns: int = 60_000_000_000
         self._ladder_lock = threading.Lock()  # Thread safety for ladder snapshots
+        self._ops_lock = threading.Lock()  # Thread safety for API→strategy mutations (flatten, throttle)
 
         # Error recovery state
         self._critical_error = False  # Flag to indicate critical error state
@@ -816,7 +817,6 @@ class HedgeGridV1(
                 side=side,
                 quantity=qty,
                 tp_price=tp_price,
-                position_id=position_id,
                 level=0,
                 fill_event_ts=ts_now,
             )
@@ -824,7 +824,6 @@ class HedgeGridV1(
                 side=side,
                 quantity=qty,
                 sl_price=sl_price,
-                position_id=position_id,
                 level=0,
                 fill_event_ts=ts_now,
             )
@@ -1105,8 +1104,8 @@ class HedgeGridV1(
         When a grid order fills:
         1. Parse client_order_id to get original rung metadata
         2. Retrieve rung TP/SL prices from grid calculation
-        3. Create TP limit order (reduce-only) at tp_price
-        4. Create SL stop-market order (reduce-only) at sl_price
+        3. Create TP limit order at tp_price (reduce_only=False, see order_executor.py NOTE)
+        4. Create SL stop-market order at sl_price (reduce_only=False, see order_executor.py NOTE)
         5. Submit both with correct position_id suffix
 
         Args:
@@ -1335,24 +1334,22 @@ class HedgeGridV1(
                 return
 
             try:
-                # Create TP limit order (reduce-only) using fill event timestamp for uniqueness
+                # Create TP limit order using fill event timestamp for uniqueness
                 tp_order = self._create_tp_order(
                     side=side,
                     quantity=fill_qty,
                     tp_price=tp_price,
-                    position_id=position_id,
                     level=level,  # type: ignore[arg-type]
-                    fill_event_ts=event.ts_event,  # Use fill event timestamp for unique IDs
+                    fill_event_ts=event.ts_event,
                 )
 
-                # Create SL stop-market order (reduce-only) using fill event timestamp for uniqueness
+                # Create SL stop-market order using fill event timestamp for uniqueness
                 sl_order = self._create_sl_order(
                     side=side,
                     quantity=fill_qty,
                     sl_price=sl_price,
-                    position_id=position_id,
                     level=level,  # type: ignore[arg-type]
-                    fill_event_ts=event.ts_event,  # Use fill event timestamp for unique IDs
+                    fill_event_ts=event.ts_event,
                 )
 
                 # Validate orders were created successfully
@@ -1363,7 +1360,10 @@ class HedgeGridV1(
                         self._fills_with_exits.discard(fill_key)
                     return
 
-                # Submit orders
+                # Submit orders — intentionally bypasses risk gates (_execute_add) because:
+                # 1. TP/SL are exit orders that reduce exposure, not increase it
+                # 2. They must be placed even when drawdown/circuit breaker is active
+                # 3. Blocking TP/SL would leave positions unprotected
                 self.submit_order(tp_order, position_id=position_id)
                 self.submit_order(sl_order, position_id=position_id)
 

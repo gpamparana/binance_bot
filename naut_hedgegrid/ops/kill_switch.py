@@ -342,6 +342,7 @@ class KillSwitch:
             self._check_funding_cost_circuit(metrics)
             self._check_margin_ratio_circuit(metrics)
             self._check_loss_limit_circuit(metrics)
+            self._check_position_size_circuit(metrics)
 
         except Exception as e:
             self.logger.error(f"Error checking safety circuits: {e}", exc_info=True)
@@ -477,6 +478,27 @@ class KillSwitch:
                     threshold=self.config.daily_loss_limit_usdt,
                     unit="USDT",
                 )
+
+    def _check_position_size_circuit(self, metrics: dict) -> None:
+        """Check if total position size exceeds max_position_usdt threshold.
+
+        Args:
+            metrics: Current operational metrics from strategy
+        """
+        if self.config.max_position_usdt is None:
+            return
+
+        long_inv = abs(metrics.get("long_inventory_usdt", 0.0))
+        short_inv = abs(metrics.get("short_inventory_usdt", 0.0))
+        total_position = long_inv + short_inv
+
+        if total_position > self.config.max_position_usdt:
+            self._trigger_circuit_breaker(
+                breaker_type="Position Size",
+                current_value=total_position,
+                threshold=self.config.max_position_usdt,
+                unit="USDT",
+            )
 
     def _trigger_circuit_breaker(
         self,

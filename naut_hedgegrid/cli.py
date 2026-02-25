@@ -266,6 +266,11 @@ def paper(
         "--api-key",
         help="API key for FastAPI authentication (optional)",
     ),
+    allow_production_venue: bool = typer.Option(
+        False,
+        "--allow-production-venue",
+        help="Allow paper trading against production exchange (dangerous)",
+    ),
 ) -> None:
     """Run paper trading with simulated execution.
 
@@ -312,6 +317,7 @@ def paper(
         prometheus_port=prometheus_port,
         api_port=api_port,
         api_key=api_key,
+        allow_production_venue=allow_production_venue,
     )
 
 
@@ -516,17 +522,19 @@ def flatten(
         raise typer.Exit(code=1)
 
     # Build URL
-    url = f"http://{host}:{port}/api/v1/flatten/{side_upper.lower()}"
+    url = f"http://{host}:{port}/api/v1/flatten"
 
-    # Prepare headers
-    headers = {}
+    # Prepare headers and body
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
+
+    body = {"side": side_upper.lower()}
 
     console.print(f"[cyan]Sending flatten request to {url}...[/cyan]")
 
     try:
-        response = requests.post(url, headers=headers, timeout=10)
+        response = requests.post(url, headers=headers, json=body, timeout=10)
         response.raise_for_status()
 
         # Parse response

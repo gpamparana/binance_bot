@@ -264,7 +264,11 @@ class OperationsManager:
 
             if operation == "flatten":
                 side = params.get("side", "both")
-                result = self.strategy.flatten_side(side)
+                # Route through KillSwitch for consistent logging/alerting/verification
+                if self._kill_switch is not None:
+                    result = self._kill_switch.flatten_now(side, reason="API flatten request")
+                else:
+                    result = self.strategy.flatten_side(side)
                 return {"success": True, **result}
 
             if operation == "set_throttle":

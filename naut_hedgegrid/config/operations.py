@@ -76,6 +76,12 @@ class KillSwitchConfig(BaseModel):
         description="Maximum absolute loss in USDT before flatten",
     )
 
+    max_position_usdt: float | None = Field(
+        None,
+        gt=0,
+        description="Maximum total position size in USDT before flatten (None = disabled)",
+    )
+
     daily_loss_limit_usdt: float | None = Field(
         None,
         description="Optional daily loss limit that resets at UTC midnight",

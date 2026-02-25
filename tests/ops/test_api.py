@@ -105,7 +105,7 @@ class TestStrategyAPI:
 
     def test_status_endpoint(self, client):
         """Test status endpoint."""
-        response = client.get("/status")
+        response = client.get("/api/v1/status")
 
         assert response.status_code == 200
         data = response.json()
@@ -119,7 +119,7 @@ class TestStrategyAPI:
 
     def test_start_endpoint_returns_501(self, client):
         """Test start strategy endpoint returns 501 Not Implemented."""
-        response = client.post("/start")
+        response = client.post("/api/v1/start")
 
         assert response.status_code == 501
         data = response.json()
@@ -128,7 +128,7 @@ class TestStrategyAPI:
 
     def test_stop_endpoint_returns_501(self, client):
         """Test stop strategy endpoint returns 501 Not Implemented."""
-        response = client.post("/stop")
+        response = client.post("/api/v1/stop")
 
         assert response.status_code == 501
         data = response.json()
@@ -137,7 +137,7 @@ class TestStrategyAPI:
 
     def test_flatten_endpoint(self, client):
         """Test flatten positions endpoint."""
-        response = client.post("/flatten", json={"side": "both"})
+        response = client.post("/api/v1/flatten", json={"side": "both"})
 
         assert response.status_code == 200
         data = response.json()
@@ -148,13 +148,13 @@ class TestStrategyAPI:
 
     def test_flatten_endpoint_invalid_side(self, client):
         """Test flatten with invalid side parameter."""
-        response = client.post("/flatten", json={"side": "invalid"})
+        response = client.post("/api/v1/flatten", json={"side": "invalid"})
 
         assert response.status_code == 400
 
     def test_set_throttle_endpoint(self, client):
         """Test set throttle endpoint."""
-        response = client.post("/set-throttle", json={"throttle": 0.75})
+        response = client.post("/api/v1/set-throttle", json={"throttle": 0.75})
 
         assert response.status_code == 200
         data = response.json()
@@ -164,13 +164,13 @@ class TestStrategyAPI:
 
     def test_set_throttle_invalid_value(self, client):
         """Test set throttle with invalid value."""
-        response = client.post("/set-throttle", json={"throttle": 1.5})
+        response = client.post("/api/v1/set-throttle", json={"throttle": 1.5})
 
         assert response.status_code == 422  # Validation error
 
     def test_get_ladders_endpoint(self, client):
         """Test get ladders endpoint."""
-        response = client.get("/ladders")
+        response = client.get("/api/v1/ladders")
 
         assert response.status_code == 200
         data = response.json()
@@ -183,7 +183,7 @@ class TestStrategyAPI:
 
     def test_get_orders_endpoint(self, client):
         """Test get orders endpoint."""
-        response = client.get("/orders")
+        response = client.get("/api/v1/orders")
 
         assert response.status_code == 200
         data = response.json()
@@ -203,15 +203,15 @@ class TestStrategyAPI:
         client = TestClient(api.app)
 
         # Request without API key should fail
-        response = client.get("/status")
+        response = client.get("/api/v1/status")
         assert response.status_code == 401
 
         # Request with wrong API key should fail
-        response = client.get("/status", headers={"X-API-Key": "wrong"})
+        response = client.get("/api/v1/status", headers={"X-API-Key": "wrong"})
         assert response.status_code == 401
 
         # Request with correct API key should succeed
-        response = client.get("/status", headers={"X-API-Key": "secret123"})
+        response = client.get("/api/v1/status", headers={"X-API-Key": "secret123"})
         assert response.status_code == 200
 
     def test_health_endpoint_no_auth(self):

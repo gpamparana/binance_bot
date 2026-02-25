@@ -282,7 +282,11 @@ def validate_dataframe_schema(df: pd.DataFrame, schema_type: str) -> None:
         required_cols = {"timestamp", "price", "size", "aggressor_side", "trade_id"}
         schema_cls = TradeSchema
     elif schema_type == "mark":
-        required_cols = {"timestamp", "mark_price"}
+        # Accept both raw mark price format and OHLCV bar format
+        if "mark_price" in df.columns:
+            required_cols = {"timestamp", "mark_price"}
+        else:
+            required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
         schema_cls = MarkPriceSchema
     elif schema_type == "funding":
         required_cols = {"timestamp", "funding_rate"}
@@ -312,9 +316,10 @@ def validate_dataframe_schema(df: pd.DataFrame, schema_type: str) -> None:
                 f"aggressor_side must be BUY or SELL, got '{df.loc[bad_idx, 'aggressor_side']}'"
             )
     elif schema_type == "mark":
-        if (df["mark_price"] <= 0).any():
-            bad_idx = df.index[df["mark_price"] <= 0][0]
-            raise ValueError(f"Row {bad_idx} validation failed for {schema_type}: mark_price must be positive")
+        price_col = "mark_price" if "mark_price" in df.columns else "close"
+        if (df[price_col] <= 0).any():
+            bad_idx = df.index[df[price_col] <= 0][0]
+            raise ValueError(f"Row {bad_idx} validation failed for {schema_type}: {price_col} must be positive")
     # Funding rates can be negative, so no vectorized check needed
 
     # Per-row Pydantic validation only on first few rows as spot-check (full data checked above)

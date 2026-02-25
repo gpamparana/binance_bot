@@ -148,7 +148,6 @@ class OrderExecutionMixin:
         side: Side,
         quantity: float,
         tp_price: float,
-        _position_id: PositionId,
         level: int,
         fill_event_ts: int,
     ) -> LimitOrder:
@@ -196,7 +195,6 @@ class OrderExecutionMixin:
         side: Side,
         quantity: float,
         sl_price: float,
-        _position_id: PositionId,
         level: int,
         fill_event_ts: int,
     ) -> StopMarketOrder:

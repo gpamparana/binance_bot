@@ -22,7 +22,7 @@ Expected attributes on self (initialized in HedgeGridV1.__init__):
 from nautilus_trader.model.enums import OrderSide, PositionSide, TimeInForce
 from nautilus_trader.model.identifiers import PositionId
 
-from naut_hedgegrid.domain.types import Ladder, Rung
+from naut_hedgegrid.domain.types import Ladder, Rung, Side, parse_client_order_id
 
 
 class OpsControlMixin:
@@ -34,7 +34,10 @@ class OpsControlMixin:
         self.log.info("Kill switch attached to strategy")
 
     def flatten_side(self, side: str) -> dict:
-        """Flatten positions for given side (called by kill switch).
+        """Flatten positions for given side (called by kill switch or API).
+
+        Thread-safe: acquires _ops_lock to prevent concurrent mutations
+        from API thread pool racing with on_bar() strategy logic.
 
         Args:
             side: "long", "short", or "both"
@@ -42,31 +45,36 @@ class OpsControlMixin:
         Returns:
             dict with cancelled orders and closing positions info
         """
-        result = {
-            "cancelled_orders": 0,
-            "closing_positions": [],
-        }
+        with self._ops_lock:
+            result = {
+                "cancelled_orders": 0,
+                "closing_positions": [],
+            }
 
-        sides = ["long", "short"] if side == "both" else [side]
+            sides = ["long", "short"] if side == "both" else [side]
 
-        for s in sides:
-            cancelled = self._cancel_side_orders(s)
-            result["cancelled_orders"] += cancelled
+            for s in sides:
+                cancelled = self._cancel_side_orders(s)
+                result["cancelled_orders"] += cancelled
 
-            position_info = self._close_side_position(s)
-            if position_info:
-                result["closing_positions"].append(position_info)
+                position_info = self._close_side_position(s)
+                if position_info:
+                    result["closing_positions"].append(position_info)
 
-        return result
+            return result
 
     def set_throttle(self, throttle: float) -> None:
-        """Adjust strategy aggressiveness (0.0 = passive, 1.0 = aggressive)."""
-        if not 0.0 <= throttle <= 1.0:
-            msg = f"Throttle must be between 0.0 and 1.0, got {throttle}"
-            raise ValueError(msg)
+        """Adjust strategy aggressiveness (0.0 = passive, 1.0 = aggressive).
 
-        self._throttle = throttle
-        self.log.info(f"Throttle set to {throttle:.2f}")
+        Thread-safe: acquires _ops_lock to prevent concurrent mutations.
+        """
+        with self._ops_lock:
+            if not 0.0 <= throttle <= 1.0:
+                msg = f"Throttle must be between 0.0 and 1.0, got {throttle}"
+                raise ValueError(msg)
+
+            self._throttle = throttle
+            self.log.info(f"Throttle set to {throttle:.2f}")
 
     def _apply_throttle(self, ladder: Ladder) -> Ladder:
         """Scale ladder quantities by throttle factor."""
@@ -123,20 +131,38 @@ class OpsControlMixin:
         ]
 
     def _cancel_side_orders(self, side: str) -> int:
-        """Cancel all orders for given side."""
+        """Cancel all orders for given side (grid + TP/SL).
+
+        Uses typed parsing for grid orders and side-abbreviation matching
+        for TP/SL orders (which use a different ID format).
+        """
         cancelled = 0
-        position_suffix = f"-{side.upper()}"
+        target_side = Side.LONG if side.upper() == "LONG" else Side.SHORT
+        side_abbr = "L" if target_side == Side.LONG else "S"
 
         open_orders = self.cache.orders_open(venue=self._venue)
 
         for order in open_orders:
-            if not order.client_order_id.value.startswith(self._strategy_name):
+            order_id = order.client_order_id.value
+            if not order_id.startswith(self._strategy_name):
+                continue
+            if not order.is_open:
                 continue
 
-            if position_suffix in str(order.client_order_id):
-                if order.is_open:
+            # Try typed parser first (works for grid orders: STRATEGY-SIDE-LEVEL-TS)
+            try:
+                parsed = parse_client_order_id(order_id)
+                if parsed["side"] == target_side:
                     self.cancel_order(order)
                     cancelled += 1
+                    continue
+            except (ValueError, KeyError):
+                pass
+
+            # Fallback for TP/SL orders (format: STRATEGY-TP-L01-TS-COUNTER)
+            if f"-TP-{side_abbr}" in order_id or f"-SL-{side_abbr}" in order_id:
+                self.cancel_order(order)
+                cancelled += 1
 
         self.log.warning(f"Cancelled {cancelled} {side} orders")
         return cancelled
@@ -162,6 +188,8 @@ class OpsControlMixin:
                 reduce_only=False,
             )
 
+            # Intentionally bypasses risk gates — flatten is an operator-initiated
+            # emergency exit that must execute regardless of drawdown/circuit breaker state
             self.submit_order(order, position_id=position_id)
             self.log.warning(f"Closing {side} position: {position.quantity} @ market")
 

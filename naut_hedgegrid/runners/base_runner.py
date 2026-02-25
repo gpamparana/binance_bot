@@ -117,13 +117,15 @@ class BaseRunner(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
+    def show_startup_warning(self, venue_cfg: VenueConfig, *, allow_production_venue: bool = False) -> None:
         """Display mode-specific startup warnings.
 
         Parameters
         ----------
         venue_cfg : VenueConfig
             Venue configuration for display
+        allow_production_venue : bool
+            If True, allow paper trading against production exchange
         """
         raise NotImplementedError
 
@@ -457,6 +459,7 @@ class BaseRunner(ABC):
         prometheus_port: int = 9090,
         api_port: int = 8080,
         api_key: str | None = None,
+        allow_production_venue: bool = False,
     ) -> None:
         """Main runner logic.
 
@@ -519,6 +522,17 @@ class BaseRunner(ABC):
                     msg = "API credentials not found in venue config"
                     raise ValueError(msg)
                 self.console.print("[green]✓[/green] API credentials found in venue config")
+
+                # Reject sentinel/placeholder credentials in live/paper modes
+                if venue_cfg.api.has_sentinel_credentials():
+                    self.console.print(
+                        "[red]Error: API credentials appear to be placeholder values (e.g. 'BACKTEST_MODE')[/red]"
+                    )
+                    self.console.print(
+                        "[yellow]Set BINANCE_API_KEY and BINANCE_API_SECRET environment variables.[/yellow]"
+                    )
+                    msg = "API credentials are placeholder values — set real credentials for live/paper trading"
+                    raise ValueError(msg)
             self.console.print()
 
             # Get instrument ID from strategy config
@@ -536,7 +550,7 @@ class BaseRunner(ABC):
             self.console.print()
 
             # Show mode-specific warnings
-            self.show_startup_warning(venue_cfg)
+            self.show_startup_warning(venue_cfg, allow_production_venue=allow_production_venue)
 
             # Configure TradingNode
             self.console.print("[bold]Configuring trading node...[/bold]")
@@ -776,13 +790,15 @@ class LiveRunner(BaseRunner):
         """
         return "LIVE-001"
 
-    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
+    def show_startup_warning(self, venue_cfg: VenueConfig, *, allow_production_venue: bool = False) -> None:  # noqa: ARG002
         """Display live trading warning.
 
         Parameters
         ----------
         venue_cfg : VenueConfig
             Venue configuration
+        allow_production_venue : bool
+            Unused for live runner (production venue is expected)
         """
         if venue_cfg.api.testnet:
             raise ValueError(
@@ -870,21 +886,36 @@ class PaperRunner(LiveRunner):
         """
         return "PAPER-001"
 
-    def show_startup_warning(self, venue_cfg: VenueConfig) -> None:
+    def show_startup_warning(self, venue_cfg: VenueConfig, *, allow_production_venue: bool = False) -> None:
         """Display paper trading startup message with testnet safety check.
 
         Parameters
         ----------
         venue_cfg : VenueConfig
             Venue configuration
+        allow_production_venue : bool
+            If True, allow paper trading against production exchange
         """
         if not venue_cfg.api.testnet:
+            if not allow_production_venue:
+                error_panel = Panel(
+                    "[bold red]ERROR: Paper mode requires testnet venue config![/bold red]\n\n"
+                    "Your venue config has testnet: false.\n"
+                    "Paper trading against production exchange is blocked by default.\n\n"
+                    "[yellow]Options:[/yellow]\n"
+                    "  1. Use testnet config: --venue-config configs/venues/binance_futures_testnet.yaml\n"
+                    "  2. Override with: --allow-production-venue",
+                    title="BLOCKED",
+                    border_style="red",
+                )
+                self.console.print(error_panel)
+                msg = "Paper trading on production venue blocked. Use --allow-production-venue to override."
+                raise SystemExit(msg)
+
             warning_panel = Panel(
-                "[bold yellow]WARNING: Paper mode but testnet is NOT enabled![/bold yellow]\n\n"
-                "Your venue config has testnet: false.\n"
-                "Paper trading should use a testnet venue config for safety.\n"
-                "Orders WILL be placed on the LIVE exchange.\n\n"
-                "[yellow]Consider using configs/venues/binance_futures_testnet.yaml[/yellow]",
+                "[bold yellow]WARNING: Paper mode with production venue![/bold yellow]\n\n"
+                "You have explicitly allowed paper trading against the production exchange.\n"
+                "This connects to real market data with production API credentials.",
                 title="CAUTION",
                 border_style="yellow",
             )

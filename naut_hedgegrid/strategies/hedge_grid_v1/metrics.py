@@ -69,20 +69,22 @@ class MetricsMixin:
         return self._calculate_inventory("long") - self._calculate_inventory("short")
 
     def _get_active_rungs(self, side: str) -> list:
-        """Get list of active grid rungs for given side."""
+        """Get list of active grid rungs for given side using typed parsing."""
+        from naut_hedgegrid.domain.types import Side
+
         open_orders = self._get_live_grid_orders()
-        position_suffix = f"-{side.upper()}"
+        target_side = Side.LONG if side.upper() == "LONG" else Side.SHORT
         active_rungs = []
 
         for order in open_orders:
-            if position_suffix in str(order.client_order_id):
-                try:
-                    parsed = self._parse_cached_order_id(order.client_order_id)
+            try:
+                parsed = self._parse_cached_order_id(order.client_order_id)
+                if parsed.get("side") == target_side:
                     level = parsed.get("level")
                     if level is not None:
                         active_rungs.append(level)
-                except (ValueError, KeyError):
-                    continue
+            except (ValueError, KeyError):
+                continue
 
         return active_rungs
 
